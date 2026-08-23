@@ -1,0 +1,7 @@
+export { AuditTrailPage } from './AuditTrailPage'
+export { ImportPage } from './ImportPage'
+export { IntegrationsPage } from './IntegrationsPage'
+export { OrganisationPage } from './OrganisationPage'
+export { RolesPage } from './RolesPage'
+export { SettingsPage } from './SettingsPage'
+export { UsersPage } from './UsersPage'

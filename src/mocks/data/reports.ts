@@ -1,0 +1,297 @@
+import type { SavedReport, SavedView } from '@/types'
+import { relativeIso } from './reference'
+
+/**
+ * FR-050: the four statutory reporting periods ship as ready-made reports so a
+ * reviewer can run one immediately; the builder (FR-052) starts from any of them.
+ */
+export const savedReports: SavedReport[] = [
+  {
+    id: 'rep-001',
+    name: 'Weekly FOI Activity Summary',
+    description:
+      'Requests received, responded and closed in the last seven days, grouped by status with SLA compliance.',
+    creatorId: 'usr-004',
+    filters: {
+      period: 'weekly',
+      statuses: [],
+      departments: [],
+      priorities: [],
+      assignees: [],
+      tags: [],
+      groupBy: 'status',
+      metrics: ['count', 'sla_compliance', 'overdue_count'],
+    },
+    cadence: 'weekly',
+    recipients: ['legal.head@hyprep.gov.ng', 'coordinator@hyprep.gov.ng'],
+    format: 'pdf',
+    lastRun: relativeIso(-3, 6, 0),
+    nextRun: relativeIso(4, 6, 0),
+    createdAt: relativeIso(-210, 9, 0),
+  },
+  {
+    id: 'rep-002',
+    name: 'Monthly Compliance Report',
+    description:
+      'Statutory performance for the month: average response time, seven-day compliance rate and overdue caseload by department.',
+    creatorId: 'usr-002',
+    filters: {
+      period: 'monthly',
+      statuses: [],
+      departments: [],
+      priorities: [],
+      assignees: [],
+      tags: [],
+      groupBy: 'department',
+      metrics: ['count', 'avg_response_days', 'sla_compliance', 'overdue_count'],
+    },
+    cadence: 'monthly',
+    recipients: ['coordinator@hyprep.gov.ng', 'legal.head@hyprep.gov.ng', 'me@hyprep.gov.ng'],
+    format: 'pdf',
+    lastRun: relativeIso(-12, 6, 30),
+    nextRun: relativeIso(18, 6, 30),
+    createdAt: relativeIso(-330, 11, 0),
+  },
+  {
+    id: 'rep-003',
+    name: 'Quarterly Report to the Attorney-General',
+    description:
+      'Section 29 return: requests received, granted, granted in part, refused, transferred and pending, with the grounds relied upon.',
+    creatorId: 'usr-004',
+    filters: {
+      period: 'quarterly',
+      statuses: [],
+      departments: [],
+      priorities: [],
+      assignees: [],
+      tags: [],
+      groupBy: 'status',
+      metrics: ['count', 'avg_response_days', 'sla_compliance', 'appeals', 'escalations'],
+    },
+    cadence: 'quarterly',
+    recipients: ['coordinator@hyprep.gov.ng', 'foi.desk@justice.gov.ng'],
+    format: 'pdf',
+    lastRun: relativeIso(-38, 7, 0),
+    nextRun: relativeIso(52, 7, 0),
+    createdAt: relativeIso(-400, 8, 30),
+  },
+  {
+    id: 'rep-004',
+    name: 'Annual FOI Performance Review',
+    description:
+      'Twelve-month trend of request volume, response performance, appeal outcomes and litigation exposure.',
+    creatorId: 'usr-001',
+    filters: {
+      period: 'yearly',
+      statuses: [],
+      departments: [],
+      priorities: [],
+      assignees: [],
+      tags: [],
+      groupBy: 'month',
+      metrics: ['count', 'avg_response_days', 'sla_compliance', 'appeals'],
+    },
+    cadence: 'yearly',
+    recipients: ['coordinator@hyprep.gov.ng', 'audit@oaugf.gov.ng'],
+    format: 'xlsx',
+    lastRun: relativeIso(-92, 6, 0),
+    nextRun: relativeIso(273, 6, 0),
+    createdAt: relativeIso(-420, 10, 0),
+  },
+  {
+    id: 'rep-005',
+    name: 'Overdue Caseload by Officer',
+    description:
+      'Live list of requests past the seven-day statutory window, grouped by assigned officer for the Monday review meeting.',
+    creatorId: 'usr-004',
+    filters: {
+      period: 'custom',
+      statuses: ['filed', 'in_review', 'pending_info', 'escalated'],
+      departments: [],
+      priorities: [],
+      assignees: [],
+      tags: [],
+      groupBy: 'assignee',
+      metrics: ['overdue_count', 'count', 'avg_response_days'],
+    },
+    cadence: 'weekly',
+    recipients: ['legal.head@hyprep.gov.ng'],
+    format: 'csv',
+    lastRun: relativeIso(-1, 6, 15),
+    nextRun: relativeIso(6, 6, 15),
+    createdAt: relativeIso(-120, 14, 0),
+  },
+  {
+    id: 'rep-006',
+    name: 'Litigation Exposure Register',
+    description:
+      'Appeals and escalations with a litigation-risk tag, grouped by priority, for the monthly litigation review.',
+    creatorId: 'usr-008',
+    filters: {
+      period: 'monthly',
+      statuses: ['appeal', 'escalated'],
+      departments: [],
+      priorities: [],
+      assignees: [],
+      tags: ['Litigation Risk'],
+      groupBy: 'priority',
+      metrics: ['count', 'appeals', 'escalations'],
+    },
+    cadence: 'monthly',
+    recipients: ['legal.head@hyprep.gov.ng', 'litigation@hyprep.gov.ng'],
+    format: 'xlsx',
+    lastRun: relativeIso(-9, 8, 0),
+    nextRun: relativeIso(21, 8, 0),
+    createdAt: relativeIso(-160, 15, 30),
+  },
+  {
+    id: 'rep-007',
+    name: 'Media Enquiry Digest',
+    description:
+      'Requests from journalists and media organisations in the period, grouped by requestor, for the Public Relations briefing.',
+    creatorId: 'usr-006',
+    filters: {
+      period: 'weekly',
+      statuses: [],
+      departments: [],
+      priorities: [],
+      assignees: [],
+      tags: ['Media Enquiry'],
+      groupBy: 'requestor',
+      metrics: ['count', 'avg_response_days'],
+    },
+    cadence: 'weekly',
+    recipients: ['pr@hyprep.gov.ng', 'legal.head@hyprep.gov.ng'],
+    format: 'pdf',
+    lastRun: relativeIso(-2, 7, 45),
+    nextRun: relativeIso(5, 7, 45),
+    createdAt: relativeIso(-88, 12, 0),
+  },
+  {
+    id: 'rep-008',
+    name: 'Remediation Data Requests (Ad hoc)',
+    description:
+      'Unscheduled report covering requests routed to Remediation & Restoration, for internal capacity planning.',
+    creatorId: 'usr-005',
+    filters: {
+      period: 'monthly',
+      statuses: [],
+      departments: ['Remediation & Restoration'],
+      priorities: [],
+      assignees: [],
+      tags: [],
+      groupBy: 'month',
+      metrics: ['count', 'avg_response_days', 'sla_compliance'],
+    },
+    cadence: 'none',
+    recipients: [],
+    format: 'csv',
+    lastRun: relativeIso(-21, 10, 0),
+    nextRun: null,
+    createdAt: relativeIso(-64, 16, 20),
+  },
+]
+
+/**
+ * FR-042: saved views are the filter presets the ToR asks for on the case list.
+ * Shared views are visible to the whole Legal Unit; private ones only to the owner.
+ */
+export const savedViews: SavedView[] = [
+  {
+    id: 'view-001',
+    name: 'Overdue — action today',
+    ownerId: 'usr-004',
+    isShared: true,
+    filters: {
+      statuses: ['filed', 'in_review', 'pending_info', 'escalated'],
+      sla: ['overdue'],
+    },
+    createdAt: relativeIso(-140, 9, 0),
+  },
+  {
+    id: 'view-002',
+    name: 'Due within 48 hours',
+    ownerId: 'usr-004',
+    isShared: true,
+    filters: {
+      statuses: ['filed', 'in_review', 'pending_info'],
+      sla: ['due_soon'],
+    },
+    createdAt: relativeIso(-138, 9, 10),
+  },
+  {
+    id: 'view-003',
+    name: 'Unassigned triage queue',
+    ownerId: 'usr-002',
+    isShared: true,
+    filters: {
+      statuses: ['filed'],
+      assignees: ['unassigned'],
+    },
+    createdAt: relativeIso(-120, 11, 0),
+  },
+  {
+    id: 'view-004',
+    name: 'Litigation watchlist',
+    ownerId: 'usr-008',
+    isShared: true,
+    filters: {
+      statuses: ['appeal', 'escalated'],
+      tags: ['Litigation Risk'],
+      hasCourtDate: true,
+    },
+    createdAt: relativeIso(-96, 15, 0),
+  },
+  {
+    id: 'view-005',
+    name: 'Media & journalist requests',
+    ownerId: 'usr-006',
+    isShared: true,
+    filters: {
+      tags: ['Media Enquiry'],
+    },
+    createdAt: relativeIso(-80, 10, 30),
+  },
+  {
+    id: 'view-006',
+    name: 'Critical & high priority',
+    ownerId: 'usr-004',
+    isShared: true,
+    filters: {
+      priorities: ['critical', 'high'],
+      statuses: ['filed', 'in_review', 'pending_info', 'escalated', 'appeal'],
+    },
+    createdAt: relativeIso(-70, 8, 45),
+  },
+  {
+    id: 'view-007',
+    name: 'Remediation records',
+    ownerId: 'usr-005',
+    isShared: false,
+    filters: {
+      departments: ['Remediation & Restoration'],
+    },
+    createdAt: relativeIso(-52, 13, 0),
+  },
+  {
+    id: 'view-008',
+    name: 'Restricted & confidential',
+    ownerId: 'usr-004',
+    isShared: false,
+    filters: {
+      confidentiality: ['confidential', 'restricted'],
+    },
+    createdAt: relativeIso(-40, 16, 15),
+  },
+  {
+    id: 'view-009',
+    name: 'Concluded this quarter',
+    ownerId: 'usr-007',
+    isShared: true,
+    filters: {
+      statuses: ['closed', 'rejected'],
+      dateFrom: relativeIso(-90).slice(0, 10),
+    },
+    createdAt: relativeIso(-30, 12, 0),
+  },
+]
