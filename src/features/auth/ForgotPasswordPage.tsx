@@ -23,8 +23,8 @@ export function ForgotPasswordPage() {
 
   if (sent) {
     return (
-      <AuthLayout title="Check your email">
-        <div className="rounded-xl border border-brand-200 bg-brand-50/70 p-4">
+      <AuthLayout eyebrow="Password recovery" title="Check your email">
+        <div className="rounded-r-lg border-l-2 border-brand-500 bg-brand-50/70 px-4 py-3.5">
           <CheckCircle2 aria-hidden className="h-5 w-5 text-brand-600" />
           <p className="mt-2.5 text-sm leading-relaxed text-ink-700">
             If <span className="font-medium text-ink-900">{email}</span> matches an account on this
@@ -55,6 +55,7 @@ export function ForgotPasswordPage() {
 
   return (
     <AuthLayout
+      eyebrow="Password recovery"
       title="Reset your password"
       description="Enter the email address on your account and we will send you a link to set a new password."
     >
@@ -67,9 +68,10 @@ export function ForgotPasswordPage() {
           onChange={(event) => setEmail(event.target.value)}
           leadingIcon={<Mail aria-hidden className="h-4 w-4" />}
           placeholder="name@hyprep.gov.ng"
+          className="h-11"
           required
         />
-        <Button type="submit" fullWidth isLoading={busy}>
+        <Button type="submit" size="lg" fullWidth isLoading={busy}>
           Send reset link
         </Button>
       </form>

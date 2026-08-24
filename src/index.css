@@ -135,16 +135,33 @@
   }
 
   /*
-   * Green panel behind the authentication screens and the shell navigation.
+   * Green panel behind the authentication screens and the boot splash.
    * Kept in the brand-500..700 band: light enough to read as Nigerian green
    * rather than near-black, dark enough to hold white text at 4.5:1 or better.
+   * One struck highlight, no blurred blobs — the panel should read as printed
+   * stock rather than as a marketing gradient.
    */
   .auth-canvas {
-    background-color: theme('colors.brand.600');
+    background-color: theme('colors.brand.700');
     background-image:
-      radial-gradient(at 82% 10%, theme('colors.brand.400') 0px, transparent 55%),
-      radial-gradient(at 6% 90%, theme('colors.brand.700') 0px, transparent 52%),
-      linear-gradient(160deg, theme('colors.brand.600'), theme('colors.brand.700'));
+      radial-gradient(115% 85% at 88% -12%, theme('colors.brand.500') 0%, transparent 58%),
+      linear-gradient(
+        168deg,
+        theme('colors.brand.600') 0%,
+        theme('colors.brand.700') 58%,
+        theme('colors.brand.800') 100%
+      );
+  }
+
+  /*
+   * Engraved double rule — the masthead device on printed instruments. Widths
+   * only; the caller supplies the colour (e.g. `border-white/25`) so the same
+   * rule works on the green panel and on paper.
+   */
+  .rule-double {
+    height: 0.3125rem;
+    border-top-width: 1px;
+    border-bottom-width: 1px;
   }
 
   .table-sticky-head th {
