@@ -51,8 +51,36 @@ administrator with:
 npx convex run seed:run
 ```
 
-The seed command is a one-time database initialization for roles, departments,
-courts, taxonomy and system settings. It is not used as a runtime data source.
+The seed command is an operator-only, idempotent database initialization for
+roles, departments, courts, taxonomy and system settings. It is not callable
+by the browser and does not create an administrator with default credentials.
+Set `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` (at least 12 characters) and
+optionally `SEED_ADMIN_NAME` on the target deployment before running it to
+commission an administrator. Remove the password environment variable after
+commissioning.
+
+## Production deployment
+
+The production frontend is `https://foi-hyprep.vercel.app`; its Convex backend
+is `compassionate-caterpillar-373` in `eu-west-1`. `vercel.json` sets the public
+production backend URLs at build time, proxies `/api/auth/*` to the backend,
+and serves the SPA entry point for client-side routes such as `/login`.
+
+Configure these server-side variables on production, not in `.env.local`:
+
+- `BETTER_AUTH_SECRET`: a cryptographically random secret with at least 32 bytes.
+- `BETTER_AUTH_URL`: `https://foi-hyprep.vercel.app`.
+- `FRONTEND_ORIGINS`: `https://foi-hyprep.vercel.app`.
+
+Then deploy and initialize the reference data:
+
+```bash
+npx convex deploy
+npx convex run --prod seed:run
+```
+
+Deploy the frontend to the existing Vercel project after the backend deploy
+passes. Auth routes must return JSON rather than the SPA HTML or a Vercel 404.
 
 ## Main capabilities
 

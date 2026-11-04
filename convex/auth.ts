@@ -269,10 +269,9 @@ export const createAuth = (ctx: GenericCtx, options: { allowSystemProvisioning?:
     // immediately after `signUp.email` to persist these fields in the app's `users` table.
     trustedOrigins: [
       process.env.BETTER_AUTH_URL as string,
-      "http://localhost:5173",
-      "http://127.0.0.1:5173",
-      "http://localhost:5174",
-      "http://127.0.0.1:5174",
+      ...(process.env.FRONTEND_ORIGINS ?? "http://localhost:5173")
+        .split(",")
+        .map((origin) => origin.trim()),
     ].filter(Boolean),
     plugins: [
       twoFactor({ issuer: "FOI-HYPREP" }),

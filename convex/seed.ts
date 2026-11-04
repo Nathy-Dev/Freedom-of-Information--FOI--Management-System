@@ -6,7 +6,7 @@
  * Run: `npx convex run seed:run`
  */
 
-import { action, internalMutation, internalQuery, env } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, env } from "./_generated/server";
 import { v } from "convex/values";
 import { components, internal } from "./_generated/api";
 import { createAuth } from "./auth";
@@ -19,6 +19,7 @@ export const seedData = internalMutation({
     departmentNames: v.array(v.string()),
     courtNames: v.array(v.object({ name: v.string(), division: v.string(), state: v.string(), address: v.string() })),
   },
+  returns: v.object({ skipped: v.boolean(), seededAt: v.optional(v.string()) }),
   handler: async (ctx, args) => {
     // Guard: skip if already seeded.
     const meta = await ctx.db
@@ -192,8 +193,7 @@ export const ensureSuperAdminProfile = internalMutation({
   },
 });
 
-/** Public entry point: run the seed with defaults. */
-export const run = action({
+export const run = internalAction({
   args: {
     organization: v.optional(v.string()),
     departmentNames: v.optional(v.array(v.string())),
@@ -201,7 +201,20 @@ export const run = action({
       v.array(v.object({ name: v.string(), division: v.string(), state: v.string(), address: v.string() })),
     ),
   },
+  returns: v.object({ skipped: v.boolean(), seededAt: v.optional(v.string()) }),
   handler: async (ctx, args): Promise<{ skipped: boolean; seededAt?: string }> => {
+    const email = env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
+    const password = env.SEED_ADMIN_PASSWORD;
+    const name = env.SEED_ADMIN_NAME?.trim() || "HYPREP Administrator";
+    if (email || password) {
+      if (!email || !password) {
+        throw new Error("Set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD to provision an administrator.");
+      }
+      if (password.length < 12) {
+        throw new Error("SEED_ADMIN_PASSWORD must be at least 12 characters long.");
+      }
+    }
+
     const departments = args.departmentNames ?? [
       "Legal Unit",
       "Procurement",
@@ -223,9 +236,10 @@ export const run = action({
     });
 
     // Seed the initial administrator into Better Auth when commissioning a deployment.
-    const email = (env.SEED_ADMIN_EMAIL ?? "ibrahim.sanusi@hyprep.gov.ng").toLowerCase();
-    const password = env.SEED_ADMIN_PASSWORD ?? "ChangeMe123!";
-    const name = env.SEED_ADMIN_NAME ?? "Ibrahim Sanusi";
+    if (!email || !password) {
+      console.log("[seed] Reference data ready; administrator credentials are not configured.");
+      return result;
+    }
 
     try {
       const auth = createAuth(ctx as never, { allowSystemProvisioning: true });
@@ -259,7 +273,7 @@ export const run = action({
         });
         console.log(`[seed] Better Auth admin already existed; profile ensured: ${email}`);
       } else {
-        console.warn("[seed] Better Auth admin creation skipped:", e);
+        throw e;
       }
     }
 
