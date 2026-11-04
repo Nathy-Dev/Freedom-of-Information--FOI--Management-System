@@ -15,12 +15,13 @@ import {
   Textarea,
 } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
-import { recordCourtOutcome, scheduleCourtDate } from '@/mocks/api'
-import { reference, usersById } from '@/mocks/db'
+import { useRecordCourtOutcome, useScheduleCourtDate } from '@/api/court'
+import { useData } from '@/store/DataContext'
 import { HEARING_TYPE_LABELS } from '@/lib/constants'
 import { formatClock, formatDate } from '@/lib/format'
 import { useAuth } from '@/store/AuthContext'
 import { useToast } from '@/store/ToastContext'
+import { EMPTY_REFERENCE } from '@/api/directory'
 
 export interface CaseCourtPanelProps {
   caseId: string
@@ -53,6 +54,10 @@ export function CaseCourtPanel({
   readOnly = false,
 }: CaseCourtPanelProps) {
   const { user } = useAuth()
+  const { reference, usersById } = useData()
+  const liveReference = reference ?? EMPTY_REFERENCE
+  const scheduleCourtDate = useScheduleCourtDate()
+  const recordCourtOutcome = useRecordCourtOutcome()
   const toast = useToast()
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [outcomeTarget, setOutcomeTarget] = useState<CourtDate | null>(null)
@@ -60,13 +65,13 @@ export function CaseCourtPanel({
 
   const existingSuit = courtDates[0]?.suitNumber ?? ''
   const [suitNumber, setSuitNumber] = useState(existingSuit)
-  const [courtId, setCourtId] = useState(reference.courts[0]?.id ?? '')
+  const [courtId, setCourtId] = useState('')
   const [hearingType, setHearingType] = useState<HearingType>('mention')
   const [date, setDate] = useState(isoDaysAhead(14))
   const [time, setTime] = useState('09:00')
   const [duration, setDuration] = useState('60')
   const [judge, setJudge] = useState('')
-  const [counselId, setCounselId] = useState(reference.assignableStaff[0]?.id ?? '')
+  const [counselId, setCounselId] = useState('')
   const [notes, setNotes] = useState('')
 
   const [outcomeStatus, setOutcomeStatus] = useState<CourtDateStatus>('held')
@@ -75,29 +80,24 @@ export function CaseCourtPanel({
 
   const create = async () => {
     if (!user) return
-    const court = reference.courts.find((item) => item.id === courtId)
+    const court = liveReference.courts.find((item) => item.id === courtId)
     if (!court) return
     setBusy(true)
     try {
-      await scheduleCourtDate(
-        {
+      await scheduleCourtDate({
           caseId,
           suitNumber: suitNumber.trim() || `FHC/PH/CS/NEW/${new Date().getFullYear()}`,
           date,
           time,
           durationMinutes: Number(duration) || 60,
-          courtId: court.id,
           courtName: `${court.name}, ${court.division}`,
           location: court.address,
           judge: judge.trim() || 'To be assigned',
           hearingType,
           counselIds: [counselId],
           notes: notes.trim(),
-          nextActionDue: null,
           reminderLeadDays: [7, 2, 1],
-        },
-        user.id,
-      )
+      })
       onChanged()
       toast.success('Hearing listed', `Reminders will issue 7, 2 and 1 day before ${formatDate(date)}.`)
       setNotes('')
@@ -111,11 +111,7 @@ export function CaseCourtPanel({
     if (!user || !outcomeTarget || !outcome.trim()) return
     setBusy(true)
     try {
-      await recordCourtOutcome(
-        outcomeTarget.id,
-        { status: outcomeStatus, outcome: outcome.trim(), nextActionDue: nextAction || null },
-        user.id,
-      )
+      await recordCourtOutcome(outcomeTarget.id, outcomeStatus, outcome.trim(), nextAction || undefined)
       onChanged()
       toast.success('Outcome recorded', `${outcomeTarget.suitNumber} updated on the case timeline.`)
       setOutcome('')
@@ -256,7 +252,7 @@ export function CaseCourtPanel({
           />
           <Select
             label="Court"
-            options={reference.courts.map((court) => ({
+            options={liveReference.courts.map((court) => ({
               value: court.id,
               label: `${court.name}, ${court.division}`,
             }))}
@@ -276,7 +272,7 @@ export function CaseCourtPanel({
           />
           <Select
             label="Lead counsel"
-            options={reference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name }))}
+            options={liveReference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name }))}
             value={counselId}
             onChange={(event) => setCounselId(event.target.value)}
           />

@@ -26,8 +26,8 @@ import {
   Tooltip,
 } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
-import { publishDocument, recordAccess, redactDocument, uploadDocument } from '@/mocks/api'
-import { reference, usersById } from '@/mocks/db'
+import { usePublishDocument, useRecordDocumentAccess, useRedactDocument, useUploadDocument } from '@/api/documents'
+import { useData } from '@/store/DataContext'
 import {
   CONFIDENTIALITY_META,
   DOCUMENT_KIND_META,
@@ -69,6 +69,12 @@ export function CaseDocumentsPanel({
   publishedOnly = false,
 }: CaseDocumentsPanelProps) {
   const { user } = useAuth()
+  const { reference, usersById } = useData()
+  const liveReference = reference ?? { retentionLabels: [] }
+  const uploadDocument = useUploadDocument()
+  const redactDocument = useRedactDocument()
+  const publishDocument = usePublishDocument()
+  const recordAccess = useRecordDocumentAccess()
   const toast = useToast()
   const [uploadOpen, setUploadOpen] = useState(false)
   const [redactTarget, setRedactTarget] = useState<FoiDocument | null>(null)
@@ -78,7 +84,7 @@ export function CaseDocumentsPanel({
   const [files, setFiles] = useState<File[]>([])
   const [kind, setKind] = useState<DocumentKind>('response')
   const [level, setLevel] = useState<Confidentiality>('internal')
-  const [retention, setRetention] = useState(reference.retentionLabels[0]?.label ?? 'Standard - 7 years')
+  const [retention, setRetention] = useState('7 years')
   const [notifyRequestor, setNotifyRequestor] = useState(false)
 
   const [severances, setSeverances] = useState('3')
@@ -91,18 +97,12 @@ export function CaseDocumentsPanel({
     setBusy(true)
     try {
       for (const file of files) {
-        await uploadDocument(
-          caseId,
-          {
-            fileName: file.name,
-            fileSize: file.size,
+        await uploadDocument(caseId, file, {
             kind,
             confidentiality: level,
             isPublic: notifyRequestor,
             retentionLabel: retention,
-          },
-          user.id,
-        )
+        })
       }
       onChanged()
       toast.success(
@@ -120,11 +120,7 @@ export function CaseDocumentsPanel({
     if (!user || !redactTarget) return
     setBusy(true)
     try {
-      await redactDocument(
-        redactTarget.id,
-        { redactionCount: Math.max(1, Number(severances) || 1), grounds },
-        user.id,
-      )
+      await redactDocument(redactTarget.id, Math.max(1, Number(severances) || 1), grounds)
       onChanged()
       toast.success('Redactions recorded', `A new version of ${redactTarget.fileName} was created.`)
       setRedactTarget(null)
@@ -135,14 +131,14 @@ export function CaseDocumentsPanel({
 
   const doPublish = async (doc: FoiDocument) => {
     if (!user) return
-    await publishDocument(doc.id, user.id)
+    await publishDocument(doc.id)
     onChanged()
     toast.success('Published to the requestor', `${doc.fileName} is now downloadable in their portal.`)
   }
 
   const doDownload = (doc: FoiDocument) => {
     if (!user) return
-    recordAccess(doc, user.id, 'download')
+    void recordAccess(doc.id, 'download')
     toast.info('Download recorded', `Access to ${doc.fileName} was written to the access log.`)
   }
 
@@ -314,7 +310,7 @@ export function CaseDocumentsPanel({
             />
             <Select
               label="Retention schedule"
-              options={reference.retentionLabels.map((item) => ({ value: item.label, label: item.label }))}
+              options={liveReference.retentionLabels.map((item) => ({ value: item.label, label: item.label }))}
               value={retention}
               onChange={(event) => setRetention(event.target.value)}
             />

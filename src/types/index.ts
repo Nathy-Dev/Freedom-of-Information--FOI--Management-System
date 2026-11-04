@@ -148,6 +148,7 @@ export interface FoiCase {
   id: string
   caseNumber: string
   requestorId: string
+  requestorUserId?: string
   requestor: RequestorSnapshot
   subject: string
   description: string
@@ -556,11 +557,6 @@ export interface SystemSettings {
   virusScanEnabled: boolean
   ocrEnabled: boolean
   defaultRetentionYears: number
-  smtpHost: string
-  smtpPort: number
-  smtpFromAddress: string
-  storageProvider: 's3' | 'azure_blob' | 'on_premise'
-  storageBucket: string
   timezone: string
   ssoEnabled: boolean
   ssoProvider: 'saml' | 'oauth2' | 'none'

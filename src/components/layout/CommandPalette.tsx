@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowRight, CornerDownLeft, FileText, Folder, Gavel, Search, StickyNote, User } from 'lucide-react'
-import type { RoleId, SearchHit } from '@/types'
+import type { RoleId } from '@/types'
 import { NAV_SECTIONS, UTILITY_NAV } from '@/lib/navigation'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/store/AuthContext'
 import { useDebounced } from '@/hooks/useAsync'
-import { globalSearch } from '@/mocks/api'
+import { useGlobalSearch } from '@/api/search'
 import { Portal, useEscapeKey, useScrollLock } from '@/components/ui'
 import { NavIcon } from './NavIcon'
 
@@ -41,7 +41,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const navigate = useNavigate()
   const [term, setTerm] = useState('')
   const [cursor, setCursor] = useState(0)
-  const [hits, setHits] = useState<SearchHit[]>([])
   const inputRef = useRef<HTMLInputElement | null>(null)
   const debounced = useDebounced(term, 180)
 
@@ -77,25 +76,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     }))
   }, [can, user])
 
-  // Record search is async (it mirrors the eventual API), pages are local.
-  useEffect(() => {
-    const query = debounced.trim()
-    if (!user || query.length < 2) {
-      setHits([])
-      return undefined
-    }
-    let live = true
-    globalSearch(query, user, 18)
-      .then((found) => {
-        if (live) setHits(found)
-      })
-      .catch(() => {
-        if (live) setHits([])
-      })
-    return () => {
-      live = false
-    }
-  }, [debounced, user])
+  const hits = useGlobalSearch(debounced, 18) ?? []
 
   const results = useMemo<Entry[]>(() => {
     const query = debounced.trim()

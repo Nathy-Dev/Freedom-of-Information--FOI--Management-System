@@ -17,8 +17,8 @@ import {
 } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
 import { DescriptionList, PageHeader } from '@/components/common'
-import { createCase, uploadDocument } from '@/mocks/api'
-import { reference } from '@/mocks/db'
+import { useCreateCase } from '@/api/cases'
+import { useUploadDocument } from '@/api/documents'
 import { RESPONSE_FORMAT_LABELS, STATUTORY_RESPONSE_DAYS } from '@/lib/constants'
 import { formatDate } from '@/lib/format'
 import { useAuth } from '@/store/AuthContext'
@@ -37,10 +37,7 @@ const FORMAT_OPTIONS: SelectOption[] = (
   ['electronic', 'hard_copy', 'inspection', 'certified_copy'] as ResponseFormat[]
 ).map((value) => ({ value, label: RESPONSE_FORMAT_LABELS[value] }))
 
-const DEPARTMENT_OPTIONS: SelectOption[] = [
-  { value: '', label: 'I am not sure — let HYPREP decide' },
-  ...reference.departments.map((dep) => ({ value: dep.name, label: dep.name })),
-]
+const DEPARTMENT_OPTIONS: SelectOption[] = [{ value: '', label: 'I am not sure — let HYPREP decide' }]
 
 interface FormState {
   name: string
@@ -60,6 +57,13 @@ export function NewRequestPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const { refresh } = useData()
+  const { reference } = useData()
+  const liveDepartmentOptions = [
+    ...DEPARTMENT_OPTIONS,
+    ...(reference?.departments ?? []).map((dep) => ({ value: dep.name, label: dep.name })),
+  ]
+  const createCase = useCreateCase()
+  const uploadDocument = useUploadDocument()
   const toast = useToast()
 
   const [step, setStep] = useState<Step>(0)
@@ -121,8 +125,7 @@ export function NewRequestPage() {
     if (!stepValid(2) || !user) return
     setBusy(true)
     try {
-      const created = await createCase(
-        {
+      const created = await createCase({
           subject: form.subject.trim(),
           description: form.description.trim(),
           department: form.department || 'Legal Unit',
@@ -139,23 +142,15 @@ export function NewRequestPage() {
             organization: form.organization.trim() || 'Private individual',
             isJournalist: form.isJournalist,
           },
-        },
-        user.id,
-      )
+      })
 
       for (const file of files) {
-        await uploadDocument(
-          created.id,
-          {
-            fileName: file.name,
-            fileSize: file.size,
+        await uploadDocument(created.id, file, {
             kind: 'request',
             confidentiality: 'public',
             isPublic: true,
             retentionLabel: 'Standard - 7 years',
-          },
-          user.id,
-        )
+        })
       }
 
       refresh()
@@ -348,7 +343,7 @@ export function NewRequestPage() {
               <Select
                 label="Which part of HYPREP holds the records?"
                 value={form.department}
-                options={DEPARTMENT_OPTIONS}
+                options={liveDepartmentOptions}
                 hint="If you are unsure, the Legal Unit will route it for you."
                 onChange={(event) => set('department', event.target.value)}
               />

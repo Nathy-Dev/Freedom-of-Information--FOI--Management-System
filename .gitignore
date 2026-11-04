@@ -33,3 +33,8 @@ dist-ssr
 
 # AI assistants
 CLAUDE.md
+AGENTS.md
+.claude
+.agents
+plans
+.docs

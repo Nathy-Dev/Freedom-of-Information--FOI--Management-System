@@ -4,7 +4,8 @@ import type { CaseStatus } from '@/types'
 import { Button, Modal, Select } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
 import { STATUS_META } from '@/lib/constants'
-import { reference } from '@/mocks/db'
+import { useData } from '@/store/DataContext'
+import { EMPTY_REFERENCE } from '@/api/directory'
 
 export interface BulkActionBarProps {
   count: number
@@ -32,16 +33,18 @@ export function BulkActionBar({
   onExport,
   busy = false,
 }: BulkActionBarProps) {
+  const { reference } = useData()
+  const liveReference = reference ?? EMPTY_REFERENCE
   const [sheet, setSheet] = useState<Sheet>(null)
   const [assignee, setAssignee] = useState('')
   const [status, setStatus] = useState<CaseStatus>('in_review')
-  const [tag, setTag] = useState(reference.tags[0]?.label ?? '')
+  const [tag, setTag] = useState('')
 
   const close = () => setSheet(null)
 
   const assigneeOptions: SelectOption[] = [
     { value: '', label: 'Unassign' },
-    ...reference.assignableStaff.map((staff) => ({
+    ...liveReference.assignableStaff.map((staff) => ({
       value: staff.id,
       label: `${staff.name} — ${staff.position ?? staff.department ?? "Legal Unit"}`,
     })),
@@ -179,7 +182,7 @@ export function BulkActionBar({
       >
         <Select
           label="Tag"
-          options={reference.tags.map((item) => ({ value: item.label, label: item.label }))}
+          options={liveReference.tags.map((item) => ({ value: item.label, label: item.label }))}
           value={tag}
           onChange={(event) => setTag(event.target.value)}
         />

@@ -21,11 +21,9 @@ import {
   SkeletonCard,
 } from '@/components/ui'
 import { PageHeader } from '@/components/common'
-import { globalSearch } from '@/mocks/api'
+import { useGlobalSearch } from '@/api/search'
 import { highlight } from '@/lib/utils'
-import { useAsync, useDebounced } from '@/hooks/useAsync'
-import { useAuth } from '@/store/AuthContext'
-import { useData } from '@/store/DataContext'
+import { useDebounced } from '@/hooks/useAsync'
 
 type HitType = SearchHit['type']
 
@@ -60,8 +58,6 @@ function Marked({ text, term }: { text: string; term: string }) {
 
 /** FR-040 / FR-041: cross-entity search results with type facets. */
 export function SearchPage() {
-  const { user } = useAuth()
-  const { version } = useData()
   const [params, setParams] = useSearchParams()
 
   const initial = params.get('q') ?? ''
@@ -77,12 +73,8 @@ export function SearchPage() {
     setParams(draft, { replace: true })
   }
 
-  const search = useAsync(
-    () => (user && debounced.trim().length >= 2 ? globalSearch(debounced, user, 80) : Promise.resolve([])),
-    [debounced, user, version],
-  )
-
-  const hits = search.data ?? []
+  const convexHits = useGlobalSearch(debounced, 80)
+  const hits = convexHits ?? []
 
   const counts = useMemo(() => {
     const map = new Map<HitType, number>()
@@ -151,7 +143,7 @@ export function SearchPage() {
             />
           </CardBody>
         </Card>
-      ) : search.isLoading && !search.data ? (
+      ) : convexHits === undefined ? (
         <SkeletonCard lines={6} />
       ) : hits.length === 0 ? (
         <Card>
@@ -221,7 +213,7 @@ export function SearchPage() {
           </div>
 
           <p className="pb-2 text-xs text-ink-400">
-            Showing {filtered.length} of {hits.length} matches. Search is capped at 80 results in this prototype; refine the
+            Showing {filtered.length} of {hits.length} matches. Search is capped at 80 results; refine the
             term or use the case list filters for exhaustive queries.
           </p>
         </>

@@ -17,7 +17,7 @@ export interface FileDropProps {
 
 /**
  * Drag-and-drop upload surface. No network calls: the selected files are held
- * in component state and the mock API records the metadata.
+ * in component state while the live mutation records the metadata.
  */
 export function FileDrop({
   files,

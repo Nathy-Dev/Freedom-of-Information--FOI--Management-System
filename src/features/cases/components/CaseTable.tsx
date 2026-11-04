@@ -18,7 +18,7 @@ import {
 import type { SortDirection } from '@/components/ui'
 import { computeSla } from '@/lib/sla'
 import { formatDate } from '@/lib/format'
-import { usersById } from '@/mocks/db'
+import { useData } from '@/store/DataContext'
 
 export type CaseSortKey =
   | 'caseNumber'
@@ -53,6 +53,7 @@ export function CaseTable({
   onToggleAll,
   selectable = false,
 }: CaseTableProps) {
+  const { usersById } = useData()
   const allSelected = selectable && rows.length > 0 && rows.every((row) => selected?.has(row.id))
   const someSelected = selectable && rows.some((row) => selected?.has(row.id)) && !allSelected
 

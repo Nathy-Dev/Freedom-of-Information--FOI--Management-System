@@ -30,8 +30,6 @@ import {
 import type { SelectOption, TabItem } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { BarChartCard, SlaGauge, StackedBarCard, StatusDonut, TrendChart } from '@/components/charts'
-import { selectCases } from '@/mocks/api'
-import { reference, userName } from '@/mocks/db'
 import {
   aging,
   byDepartment,
@@ -40,7 +38,7 @@ import {
   statusBreakdown,
   topRequestors,
   workload,
-} from '@/mocks/metrics'
+} from '@/lib/reporting'
 import { PRIORITY_META, STATUS_META } from '@/lib/constants'
 import { formatDays, formatNumber, formatPercent } from '@/lib/format'
 import { downloadTextFile, toCsv } from '@/lib/utils'
@@ -67,28 +65,29 @@ const TABS: Array<TabItem<ReportTab>> = [
 /** FR-050 to FR-053: the predefined report set every FOI annual return needs. */
 export function ReportsPage() {
   const { user, can } = useAuth()
-  const { version } = useData()
+  const { cases: liveCases, users, usersById } = useData()
 
   const [tab, setTab] = useState<ReportTab>('overview')
   const [range, setRange] = useState('365')
 
   const cases = useMemo<FoiCase[]>(() => {
     if (!user) return []
-    const rows = selectCases(user)
-    if (range === 'all') return rows
+    const source = liveCases
+    if (range === 'all') return source
     const cutoff = new Date()
     cutoff.setDate(cutoff.getDate() - Number(range))
-    return rows.filter((row) => new Date(row.dateSubmitted) >= cutoff)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, range, version])
+    return source.filter((row) => new Date(row.dateSubmitted) >= cutoff)
+  }, [liveCases, range, user])
 
-  const metrics = useMemo(() => dashboardMetrics(cases, reference.assignableStaff), [cases])
+  const staff = useMemo(() => users.filter((entry) => entry.roleId === 'legal' || entry.roleId === 'admin'), [users])
+  const userName = (id: string) => usersById.get(id)?.name ?? id
+  const metrics = useMemo(() => dashboardMetrics(cases, staff), [cases, staff])
   const trend = useMemo(() => monthlyTrend(cases, range === '30' ? 3 : range === '90' ? 6 : 12), [cases, range])
   const statuses = useMemo(() => statusBreakdown(cases), [cases])
   const departments = useMemo(() => byDepartment(cases), [cases])
   const buckets = useMemo(() => aging(cases), [cases])
   const requestors = useMemo(() => topRequestors(cases, 10), [cases])
-  const officers = useMemo(() => workload(cases, reference.assignableStaff), [cases])
+  const officers = useMemo(() => workload(cases, staff), [cases, staff])
 
   const priorities = useMemo(() => {
     const order: Array<FoiCase['priority']> = ['critical', 'high', 'medium', 'low']

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   addDays,
@@ -30,7 +30,7 @@ import {
 import type { SelectOption, TabItem } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { HearingDrawer } from './components/HearingDrawer'
-import { db, reference } from '@/mocks/db'
+import { EMPTY_REFERENCE } from '@/api/directory'
 import { COURT_STATUS_META, HEARING_TYPE_LABELS } from '@/lib/constants'
 import { formatClock, formatDate } from '@/lib/format'
 import { cn, downloadTextFile, toCsv } from '@/lib/utils'
@@ -51,11 +51,12 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 /** FR-034/FR-035: the court diary. One dataset, four views, reminders per hearing. */
 export function CourtCalendarPage() {
   const { user, can } = useAuth()
-  const { version } = useData()
+  const { courtDates, cases, reference } = useData()
 
   const { hearingId } = useParams()
   const navigate = useNavigate()
-  const deepLinked = hearingId ? (db.courtDates.find((date) => date.id === hearingId) ?? null) : null
+  const liveReference = reference ?? EMPTY_REFERENCE
+  const deepLinked = hearingId ? (courtDates.find((date) => date.id === hearingId) ?? null) : null
 
   const [view, setView] = useState<CalendarView>('month')
   // A deep link lands the diary on the month that actually holds the hearing.
@@ -64,6 +65,10 @@ export function CourtCalendarPage() {
   const [counselFilter, setCounselFilter] = useState('')
   const [selected, setSelected] = useState<CourtDate | null>(deepLinked)
 
+  useEffect(() => {
+    if (hearingId) setSelected(courtDates.find((date) => date.id === hearingId) ?? null)
+  }, [courtDates, hearingId])
+
   /** Closing the drawer drops the deep-link segment so the URL stays honest. */
   function closeHearing() {
     setSelected(null)
@@ -71,12 +76,11 @@ export function CourtCalendarPage() {
   }
 
   const hearings = useMemo(() => {
-    let rows = [...db.courtDates]
+    let rows = [...courtDates]
     if (courtFilter) rows = rows.filter((row) => row.courtId === courtFilter)
     if (counselFilter) rows = rows.filter((row) => row.counselIds.includes(counselFilter))
     return rows.sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [courtFilter, counselFilter, version])
+  }, [courtDates, courtFilter, counselFilter])
 
   const byDate = useMemo(() => {
     const map = new Map<string, CourtDate[]>()
@@ -115,17 +119,17 @@ export function CourtCalendarPage() {
   const courtOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: 'All courts' },
-      ...reference.courts.map((court) => ({ value: court.id, label: `${court.name}, ${court.division}` })),
+      ...liveReference.courts.map((court) => ({ value: court.id, label: `${court.name}, ${court.division}` })),
     ],
-    [],
+    [liveReference.courts],
   )
 
   const counselOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: 'All counsel' },
-      ...reference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name })),
+      ...liveReference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name })),
     ],
-    [],
+    [liveReference.assignableStaff],
   )
 
   const step = (direction: -1 | 1) => {
@@ -154,7 +158,7 @@ export function CourtCalendarPage() {
         row.judge,
         HEARING_TYPE_LABELS[row.hearingType],
         COURT_STATUS_META[row.status].label,
-        db.cases.find((item) => item.id === row.caseId)?.caseNumber ?? '',
+        cases.find((item) => item.id === row.caseId)?.caseNumber ?? '',
       ]),
     )
     downloadTextFile(`hyprep-court-diary-${format(new Date(), 'yyyy-MM-dd')}.csv`, csv)
@@ -366,7 +370,7 @@ export function CourtCalendarPage() {
               return (
                 <ul className="divide-y divide-ink-100">
                   {rows.map((row) => {
-                    const foiCase = db.cases.find((item) => item.id === row.caseId)
+                    const foiCase = cases.find((item) => item.id === row.caseId)
                     return (
                       <li key={row.id} className="flex flex-wrap items-start gap-3 px-5 py-3.5">
                         <div className="w-24 shrink-0">

@@ -1,21 +1,33 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { Permission, RoleId, User } from '@/types'
+import { useConvexAuth } from 'convex/react'
+import type { Permission, Role, RoleId, User } from '@/types'
 import { getRole, hasPermission, homeRouteFor, isReadOnly, permissionsFor } from '@/lib/rbac'
-import { delay } from '@/lib/utils'
-import { reference, usersById } from '@/mocks/db'
-import { logAudit } from '@/mocks/api'
+import { useEnsureMyProfile, useMe, useUpdateProfile } from '@/api/auth'
+import { authClient } from '@/convexClient'
+import type { MeResult } from '@/api/auth'
 
-const SESSION_KEY = 'hyprep-foi.session'
+/**
+ * AuthContext — backed by Better Auth + Convex.
+ *
+ * - `me` comes from the `auth:me` Convex query (reactively).
+ * - Sign-in / MFA / SSO / logout go through the Better Auth client.
+ *
+ * The login flow intentionally does NOT call ensureMyProfile inline.
+ * The Better Auth session is established first; the Convex JWT propagates
+ * asynchronously via ConvexBetterAuthProvider. Once useConvexAuth reports
+ * isAuthenticated, an effect calls ensureMyProfile to repair any missing
+ * profile row, and the reactive `me` query resolves the user for the guards.
+ */
 
 export type LoginOutcome =
   | { status: 'mfa_required'; userId: string }
-  | { status: 'success'; user: User }
+  | { status: 'success' }
   | { status: 'error'; message: string }
 
 interface AuthContextValue {
   user: User | null
-  role: ReturnType<typeof getRole>
+  role: Role
   permissions: Permission[]
   isAuthenticated: boolean
   isReadOnly: boolean
@@ -27,141 +39,102 @@ interface AuthContextValue {
   loginWithSso: () => Promise<LoginOutcome>
   verifyMfa: (code: string) => Promise<LoginOutcome>
   cancelMfa: () => void
-  loginAs: (userId: string) => Promise<LoginOutcome>
-  switchRole: (roleId: RoleId) => void
-  logout: () => void
-  updateProfile: (patch: Partial<User>) => void
+  logout: () => Promise<void>
+  updateProfile: (patch: Partial<User>) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-/** The prototype accepts any password of a plausible length; MFA is simulated. */
-const DEMO_PASSWORD_MIN = 4
-export const DEMO_MFA_CODE = '123456'
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const { isAuthenticated: hasLiveSession } = useConvexAuth()
+  const me = useMe()
+  const updateProfileMutation = useUpdateProfile()
+  const ensureMyProfile = useEnsureMyProfile()
   const [pendingMfaUserId, setPendingMfaUserId] = useState<string | null>(null)
-  const [isBooting, setIsBooting] = useState(true)
 
-  // Restore the session so a page refresh during a review does not sign the
-  // reviewer out mid-demonstration.
+  // `me` is `undefined` while the Convex query is in-flight (loading), and
+  // `null` once it resolves with no authenticated user. Treat the loading state
+  // as booting so guards don't redirect to /login before the session arrives.
+  const isBooting = me === undefined
+
+  // Once the Convex JWT is live and the `me` query returns null (no profile
+  // row yet), fire ensureMyProfile exactly once to auto-repair.
+  const ensuredRef = useRef(false)
   useEffect(() => {
-    const stored = window.localStorage.getItem(SESSION_KEY)
-    if (stored) {
-      const restored = usersById.get(stored)
-      if (restored) setUser(restored)
+    if (hasLiveSession && me === null && !ensuredRef.current) {
+      ensuredRef.current = true
+      ensureMyProfile().catch(() => {})
     }
-    setIsBooting(false)
-  }, [])
+    if (!hasLiveSession) ensuredRef.current = false
+  }, [hasLiveSession, me, ensureMyProfile])
 
-  const persist = useCallback((next: User | null) => {
-    setUser(next)
-    if (next) window.localStorage.setItem(SESSION_KEY, next.id)
-    else window.localStorage.removeItem(SESSION_KEY)
-  }, [])
-
-  const completeSignIn = useCallback(
-    (candidate: User): LoginOutcome => {
-      candidate.lastLoginAt = new Date().toISOString()
-      persist(candidate)
-      setPendingMfaUserId(null)
-      logAudit('Session', candidate.id, candidate.name, 'login', candidate.id, 'Successful sign-in.')
-      return { status: 'success', user: candidate }
-    },
-    [persist],
-  )
+  const user: User | null = useMemo(() => {
+    const result = me as MeResult | null | undefined
+    return result?.user ?? null
+  }, [me])
 
   const login = useCallback(
     async (email: string, password: string): Promise<LoginOutcome> => {
-      await delay(520)
-      const candidate = reference.users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase())
-
-      if (!candidate || password.trim().length < DEMO_PASSWORD_MIN) {
-        if (candidate) {
-          logAudit('Session', candidate.id, candidate.name, 'login_failed', candidate.id, 'Sign-in failed: incorrect password.')
+      try {
+        const res = await authClient.signIn.email({ email, password })
+        if (res.error) {
+          return { status: 'error', message: res.error.message ?? 'Those credentials do not match an account on this system.' }
         }
-        return { status: 'error', message: 'Those credentials do not match an account on this system.' }
+        // Better Auth returns `twoFactorRedirect: true` when the account has
+        // 2FA enabled. No session is issued until the second factor is
+        // verified, so the UI must switch to the MFA stage.
+        const data = res.data as { twoFactorRedirect?: boolean } | null | undefined
+        if (data?.twoFactorRedirect) {
+          setPendingMfaUserId(email)
+          return { status: 'mfa_required', userId: email }
+        }
+        // Session is set — the Convex provider will sync the JWT
+        // asynchronously. The route guards handle redirection once `me` resolves.
+        return { status: 'success' }
+      } catch {
+        return { status: 'error', message: 'Sign-in failed. Please try again.' }
       }
-      if (candidate.status === 'suspended') {
-        return { status: 'error', message: 'This account is suspended. Contact the system administrator.' }
-      }
-      if (candidate.status === 'invited') {
-        return { status: 'error', message: 'This account has not been activated. Please use the link in your invitation email.' }
-      }
-
-      // FR-005: privileged roles must complete a second factor.
-      if (candidate.mfaEnabled) {
-        setPendingMfaUserId(candidate.id)
-        return { status: 'mfa_required', userId: candidate.id }
-      }
-      return completeSignIn(candidate)
     },
-    [completeSignIn],
+    [],
   )
 
   const verifyMfa = useCallback(
     async (code: string): Promise<LoginOutcome> => {
-      await delay(460)
-      if (!pendingMfaUserId) return { status: 'error', message: 'The sign-in session expired. Please try again.' }
-      const candidate = usersById.get(pendingMfaUserId)
-      if (!candidate) return { status: 'error', message: 'The sign-in session expired. Please try again.' }
-      if (code.trim() !== DEMO_MFA_CODE) {
-        logAudit('Session', candidate.id, candidate.name, 'login_failed', candidate.id, 'Multi-factor verification failed.')
-        return { status: 'error', message: 'That verification code is not correct.' }
+      try {
+        const res = await authClient.twoFactor.verifyTotp({ code })
+        if (res.error) {
+          return { status: 'error', message: 'That verification code is not correct.' }
+        }
+        setPendingMfaUserId(null)
+        return { status: 'success' }
+      } catch {
+        return { status: 'error', message: 'Verification failed. Please try again.' }
       }
-      return completeSignIn(candidate)
     },
-    [pendingMfaUserId, completeSignIn],
+    [],
   )
 
   const loginWithSso = useCallback(async (): Promise<LoginOutcome> => {
-    await delay(880)
-    // Entra ID returns the first mapped staff account in this prototype.
-    const candidate = usersById.get('usr-004')
-    if (!candidate) return { status: 'error', message: 'Single sign-on is not available.' }
-    logAudit('Session', candidate.id, candidate.name, 'login', candidate.id, 'Signed in via Microsoft Entra ID single sign-on.')
-    return completeSignIn(candidate)
-  }, [completeSignIn])
-
-  /** Demo convenience: jump straight into any role from the login screen. */
-  const loginAs = useCallback(
-    async (userId: string): Promise<LoginOutcome> => {
-      await delay(320)
-      const candidate = usersById.get(userId)
-      if (!candidate) return { status: 'error', message: 'That demo account is not available.' }
-      return completeSignIn(candidate)
-    },
-    [completeSignIn],
-  )
+    try {
+      await authClient.signIn.social({ provider: 'microsoft-entra-id', callbackURL: '/' })
+      return { status: 'success' }
+    } catch {
+      return { status: 'error', message: 'Single sign-on is not available.' }
+    }
+  }, [])
 
   const cancelMfa = useCallback(() => setPendingMfaUserId(null), [])
 
-  /** Lets a reviewer see the same account through a different role's lens. */
-  const switchRole = useCallback(
-    (roleId: RoleId) => {
-      if (!user) return
-      const next: User = { ...user, roleId }
-      persist(next)
-    },
-    [user, persist],
-  )
-
-  const logout = useCallback(() => {
-    if (user) logAudit('Session', user.id, user.name, 'logout', user.id, 'Signed out.')
-    persist(null)
+  const logout = useCallback(async () => {
     setPendingMfaUserId(null)
-  }, [user, persist])
+    try {
+      await authClient.signOut()
+    } catch {
+      // Best-effort; the session clears on next load regardless.
+    }
+  }, [])
 
-  const updateProfile = useCallback(
-    (patch: Partial<User>) => {
-      if (!user) return
-      const stored = usersById.get(user.id)
-      if (stored) Object.assign(stored, patch, { updatedAt: new Date().toISOString() })
-      persist({ ...user, ...patch })
-    },
-    [user, persist],
-  )
+  const updateProfile = useCallback((patch: Partial<User>) => updateProfileMutation(patch), [updateProfileMutation])
 
   const value = useMemo<AuthContextValue>(() => {
     const roleId = (user?.roleId ?? 'requestor') as RoleId
@@ -179,12 +152,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginWithSso,
       verifyMfa,
       cancelMfa,
-      loginAs,
-      switchRole,
       logout,
       updateProfile,
     }
-  }, [user, isBooting, pendingMfaUserId, login, loginWithSso, verifyMfa, cancelMfa, loginAs, switchRole, logout, updateProfile])
+  }, [user, isBooting, pendingMfaUserId, login, loginWithSso, verifyMfa, cancelMfa, logout, updateProfile])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

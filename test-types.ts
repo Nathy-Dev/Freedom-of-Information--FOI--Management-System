@@ -1,0 +1,1 @@
+import { createAuthClient } from 'better-auth/react'; import { twoFactorClient } from 'better-auth/client/plugins'; const client = createAuthClient({ plugins: [twoFactorClient()] }); async function test() { const res = await client.signIn.email({email: '', password: ''}); console.log(res.data?.twoFactorRedirect); }

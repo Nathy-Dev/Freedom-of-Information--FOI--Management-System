@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -7,8 +7,6 @@ import {
   DownloadCloud,
   FileCog,
   HardDriveDownload,
-  Mail,
-  RefreshCw,
   Save,
   ShieldCheck,
   Sliders,
@@ -23,7 +21,6 @@ import {
   CardBody,
   CardHeader,
   Input,
-  Progress,
   Select,
   Table,
   TableWrap,
@@ -37,22 +34,20 @@ import {
 } from '@/components/ui'
 import type { BadgeTone, SelectOption, TabItem } from '@/components/ui'
 import { PageHeader } from '@/components/common'
-import { exportData, runBackup, updateSettings } from '@/mocks/adminApi'
-import type { ExportScope } from '@/mocks/adminApi'
-import { reference } from '@/mocks/db'
+import { useBackups, useRunBackup, useServiceHealth, useSystemSettings, useUpdateSettings } from '@/api/directory'
+import { useExport } from '@/api/reports'
 import { TIMEZONE_LABEL, formatDateTime, formatNumber, formatRelative } from '@/lib/format'
-import { downloadTextFile } from '@/lib/utils'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
 import { useToast } from '@/store/ToastContext'
 
-type SettingsTab = 'general' | 'security' | 'documents' | 'delivery' | 'monitoring' | 'backups'
+type SettingsTab = 'general' | 'security' | 'documents' | 'monitoring' | 'backups'
+type ExportScope = 'cases' | 'documents' | 'users' | 'audit' | 'court_dates'
 
 const TABS: Array<TabItem<SettingsTab>> = [
   { key: 'general', label: 'General', icon: <Sliders className="h-4 w-4" /> },
   { key: 'security', label: 'Security', icon: <ShieldCheck className="h-4 w-4" /> },
   { key: 'documents', label: 'Documents', icon: <FileCog className="h-4 w-4" /> },
-  { key: 'delivery', label: 'Mail & storage', icon: <Mail className="h-4 w-4" /> },
   { key: 'monitoring', label: 'Monitoring', icon: <Activity className="h-4 w-4" /> },
   { key: 'backups', label: 'Backups & export', icon: <Database className="h-4 w-4" /> },
 ]
@@ -62,7 +57,6 @@ const TAB_ROUTES: Record<SettingsTab, string> = {
   general: '/system/settings',
   security: '/system/settings',
   documents: '/system/settings',
-  delivery: '/system/settings',
   monitoring: '/system/monitoring',
   backups: '/system/backups',
 }
@@ -73,11 +67,7 @@ function tabForPath(pathname: string): SettingsTab {
   return 'general'
 }
 
-const STORAGE_OPTIONS: SelectOption[] = [
-  { value: 's3', label: 'Amazon S3 (object storage)' },
-  { value: 'azure_blob', label: 'Azure Blob Storage' },
-  { value: 'on_premise', label: 'On-premise file server' },
-]
+
 
 const SSO_OPTIONS: SelectOption[] = [
   { value: 'saml', label: 'SAML 2.0' },
@@ -107,17 +97,32 @@ const EXPORT_SCOPES: Array<{ scope: ExportScope; label: string; description: str
 
 export function SettingsPage() {
   const { user, can, isReadOnly } = useAuth()
-  const { refresh, version } = useData()
+  const { refresh } = useData()
   const toast = useToast()
   const navigate = useNavigate()
   const { pathname } = useLocation()
 
   const [tab, setTab] = useState<SettingsTab>(() => tabForPath(pathname))
-  const [form, setForm] = useState<SystemSettings>(() => ({ ...reference.systemSettings }))
+  const settings = useSystemSettings(can('system:settings') || can('system:monitor'))
+  const health = useServiceHealth(can('system:monitor'))
+  const backups = useBackups(can('system:backup'))
+  const updateSettings = useUpdateSettings()
+  const runBackup = useRunBackup()
+  const exportData = useExport()
+  const [form, setForm] = useState<SystemSettings | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [busyScope, setBusyScope] = useState<ExportScope | null>(null)
   const [backupType, setBackupType] = useState<BackupRecord['type']>('incremental')
   const [isBackingUp, setIsBackingUp] = useState(false)
+  const lastLoadedSettings = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!settings) return
+    const snapshot = JSON.stringify(settings)
+    if (snapshot === lastLoadedSettings.current) return
+    lastLoadedSettings.current = snapshot
+    setForm(settings)
+  }, [settings])
 
   const canManage = can('system:settings') && !isReadOnly
 
@@ -128,8 +133,7 @@ export function SettingsPage() {
         if (item.key === 'backups') return can('system:backup') || can('system:export')
         return can('system:settings')
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [can],
   )
 
   function switchTab(next: SettingsTab) {
@@ -138,24 +142,21 @@ export function SettingsPage() {
     if (route !== pathname) navigate(route, { replace: true })
   }
 
-  const health = useMemo(() => reference.serviceHealth, [version])
-  const backups = useMemo(
-    () => [...reference.backups].sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
+  const sortedBackups = useMemo(
+    () => [...(backups ?? [])].sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
+    [backups],
   )
 
   const isDirty = useMemo(
-    () => JSON.stringify(form) !== JSON.stringify(reference.systemSettings),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [form, version],
+    () => Boolean(form && settings && JSON.stringify(form) !== JSON.stringify(settings)),
+    [form, settings],
   )
 
   const degraded = health.filter((row) => row.status !== 'operational')
-  const lastBackup = backups[0]
+  const lastBackup = sortedBackups[0]
 
   function set<K extends keyof SystemSettings>(key: K, value: SystemSettings[K]) {
-    setForm((prev) => ({ ...prev, [key]: value }))
+    setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
 
   function number(value: string, fallback: number) {
@@ -164,26 +165,31 @@ export function SettingsPage() {
   }
 
   async function save() {
-    if (!user) return
+    if (!user || !form) return
     setIsSaving(true)
     try {
-      await updateSettings(form, user.id)
+      await updateSettings(form as unknown as Record<string, unknown>)
       refresh()
       toast.success('Settings saved', 'The configuration now applies to every new request.')
+    } catch (error) {
+      toast.error(
+        'Settings could not be saved',
+        error instanceof Error ? error.message : 'Please try again.',
+      )
     } finally {
       setIsSaving(false)
     }
   }
 
   function reset() {
-    setForm({ ...reference.systemSettings })
+    if (settings) setForm(settings)
   }
 
   async function triggerBackup() {
     if (!user) return
     setIsBackingUp(true)
     try {
-      const record = await runBackup(backupType, user.id)
+      const record = await runBackup(backupType)
       refresh()
       toast.success(
         `${backupType === 'full' ? 'Full' : 'Incremental'} backup started`,
@@ -198,13 +204,19 @@ export function SettingsPage() {
     if (!user) return
     setBusyScope(scope)
     try {
-      const { fileName, csv } = await exportData(scope, user.id)
-      downloadTextFile(fileName, csv, 'text/csv')
+      const { fileName, url } = await exportData(scope)
+      if (!url) throw new Error('The export did not produce a download URL.')
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = fileName
+      anchor.click()
       toast.success('Export ready', `${fileName} has been downloaded.`)
     } finally {
       setBusyScope(null)
     }
   }
+
+  if (!form) return <p className="p-6 text-sm text-ink-500">Loading live system settings…</p>
 
   return (
     <div className="space-y-5">
@@ -449,59 +461,7 @@ export function SettingsPage() {
         </div>
       ) : null}
 
-      {tab === 'delivery' ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader title="Outbound mail" description="Acknowledgements, determinations and reminder emails." />
-            <CardBody className="space-y-3">
-              <Input
-                label="SMTP host"
-                value={form.smtpHost}
-                onChange={(event) => set('smtpHost', event.target.value)}
-                disabled={!canManage}
-              />
-              <Input
-                label="SMTP port"
-                type="number"
-                value={form.smtpPort}
-                onChange={(event) => set('smtpPort', number(event.target.value, 587))}
-                hint="587 with STARTTLS is recommended."
-                disabled={!canManage}
-              />
-              <Input
-                label="From address"
-                type="email"
-                value={form.smtpFromAddress}
-                onChange={(event) => set('smtpFromAddress', event.target.value)}
-                disabled={!canManage}
-              />
-            </CardBody>
-          </Card>
 
-          <Card>
-            <CardHeader title="Document storage" description="Where case attachments physically live." />
-            <CardBody className="space-y-3">
-              <Select
-                label="Provider"
-                options={STORAGE_OPTIONS}
-                value={form.storageProvider}
-                onChange={(event) => set('storageProvider', event.target.value as SystemSettings['storageProvider'])}
-                disabled={!canManage}
-              />
-              <Input
-                label="Bucket or share"
-                value={form.storageBucket}
-                onChange={(event) => set('storageBucket', event.target.value)}
-                disabled={!canManage}
-              />
-              <p className="rounded-lg border border-ink-200 bg-ink-50 p-3 text-xs leading-relaxed text-ink-600">
-                Changing the provider does not migrate existing objects. Plan a migration window with the platform team
-                and keep the previous bucket readable until every document has been copied and checksummed.
-              </p>
-            </CardBody>
-          </Card>
-        </div>
-      ) : null}
 
       {tab === 'monitoring' ? (
         <div className="space-y-4">
@@ -519,7 +479,7 @@ export function SettingsPage() {
               <CardBody className="space-y-1">
                 <p className="text-2xs font-semibold uppercase tracking-wide text-ink-500">Median latency</p>
                 <p className="text-lg font-semibold tabular-nums text-ink-900">
-                  {formatNumber(Math.round(health.reduce((total, row) => total + row.latencyMs, 0) / health.length))} ms
+                  {formatNumber(health.length ? Math.round(health.reduce((total, row) => total + row.latencyMs, 0) / health.length) : 0)} ms
                 </p>
                 <p className="text-xs text-ink-500">Across all probes, last minute</p>
               </CardBody>
@@ -627,7 +587,7 @@ export function SettingsPage() {
                     </Tr>
                   </Thead>
                   <Tbody>
-                    {backups.map((row) => (
+                    {sortedBackups.map((row) => (
                       <Tr key={row.id}>
                         <Td className="font-mono text-xs text-ink-700">{row.id}</Td>
                         <Td>
@@ -686,24 +646,6 @@ export function SettingsPage() {
             </CardBody>
           </Card>
 
-          <Card>
-            <CardBody className="space-y-3">
-              <div className="flex items-center gap-2">
-                <RefreshCw className="h-4 w-4 text-brand-600" />
-                <p className="text-sm font-semibold text-ink-900">Recovery objectives</p>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <Progress value={92} label="Recovery point objective — 1 hour" showValue barClassName="bg-brand-600" />
-                  <p className="mt-1 text-xs text-ink-500">Transaction logs ship to object storage every 5 minutes.</p>
-                </div>
-                <div>
-                  <Progress value={78} label="Recovery time objective — 4 hours" showValue barClassName="bg-brand-600" />
-                  <p className="mt-1 text-xs text-ink-500">Last full restore drill completed against the weekly copy.</p>
-                </div>
-              </div>
-            </CardBody>
-          </Card>
         </div>
       ) : null}
     </div>

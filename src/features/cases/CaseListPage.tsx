@@ -23,14 +23,13 @@ import { CaseTable } from './components/CaseTable'
 import type { CaseSortKey } from './components/CaseTable'
 import { SavedViewBar } from './components/SavedViewBar'
 import { BulkActionBar } from './components/BulkActionBar'
-import { bulkAddTags, bulkUpdateCases, listCases, selectCases } from '@/mocks/api'
-import { deleteView, saveView } from '@/mocks/adminApi'
-import { db } from '@/mocks/db'
+import { useBulkAddTags, useBulkUpdate, useCaseCounts, useListCases } from '@/api/cases'
+import { useDeleteView, useSaveView } from '@/api/reports'
 import { CONCLUDED_STATUSES, STATUS_META } from '@/lib/constants'
 import { computeSla } from '@/lib/sla'
 import { formatDate } from '@/lib/format'
 import { downloadTextFile, toCsv } from '@/lib/utils'
-import { useAsync, useDebounced } from '@/hooks/useAsync'
+import { useDebounced } from '@/hooks/useAsync'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
 import { useToast } from '@/store/ToastContext'
@@ -47,7 +46,7 @@ const TAB_STATUSES: Record<ListTab, CaseStatus[] | undefined> = {
 /** FR-020: the case register — tabs, filters, saved views and bulk actions. */
 export function CaseListPage() {
   const { user, can, isReadOnly } = useAuth()
-  const { version, refresh, views, teamMemberIds } = useData()
+  const { cases, refresh, views } = useData()
   const toast = useToast()
   const [params, setParams] = useSearchParams()
 
@@ -65,6 +64,10 @@ export function CaseListPage() {
   const [saveOpen, setSaveOpen] = useState(false)
   const [viewName, setViewName] = useState('')
   const [shareView, setShareView] = useState(true)
+  const updateCases = useBulkUpdate()
+  const addTags = useBulkAddTags()
+  const saveView = useSaveView()
+  const deleteView = useDeleteView()
 
   const debouncedTerm = useDebounced(term, 280)
 
@@ -79,34 +82,28 @@ export function CaseListPage() {
     return base
   }, [filters, debouncedTerm, tab])
 
-  const query = useAsync(
-    () =>
-      listCases({
-        actor: user!,
-        teamMemberIds,
-        filters: effective,
-        page,
-        pageSize,
-        sortBy: sortBy === 'dueDate' ? 'dueDate' : sortBy,
-        sortDir,
-      }),
-    [user?.id, teamMemberIds.join(','), JSON.stringify(effective), page, pageSize, sortBy, sortDir, version],
-  )
+  const query = useListCases({
+    filters: effective,
+    page,
+    pageSize,
+    sortBy: sortBy === 'dueDate' ? 'dueDate' : sortBy,
+    sortDir,
+  }, Boolean(user))
+  const liveCounts = useCaseCounts()
 
   // Tab counts come from the unpaginated selector so they survive pagination.
   const counts = useMemo(() => {
     if (!user) return { all: 0, filed: 0, pending: 0, concluded: 0 }
-    const scoped = selectCases(user, undefined, teamMemberIds)
+    const scoped = cases
     const inTab = (statuses: CaseStatus[] | undefined) =>
       statuses ? scoped.filter((row) => statuses.includes(row.status)).length : scoped.length
     return {
-      all: scoped.length,
-      filed: inTab(TAB_STATUSES.filed),
-      pending: inTab(TAB_STATUSES.pending),
-      concluded: inTab(TAB_STATUSES.concluded),
+      all: liveCounts?.total ?? scoped.length,
+      filed: liveCounts?.filed ?? inTab(TAB_STATUSES.filed),
+      pending: (liveCounts?.in_review ?? 0) + (liveCounts?.pending_info ?? 0) + (liveCounts?.escalated ?? 0) + (liveCounts?.appeal ?? 0),
+      concluded: (liveCounts?.responded ?? 0) + (liveCounts?.rejected ?? 0) + (liveCounts?.closed ?? 0),
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, teamMemberIds, version])
+  }, [cases, liveCounts, user])
 
   useEffect(() => {
     setPage(1)
@@ -123,8 +120,8 @@ export function CaseListPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, debouncedTerm])
 
-  const rows = query.data?.rows ?? []
-  const total = query.data?.total ?? 0
+  const rows = query?.rows ?? []
+  const total = query?.total ?? 0
 
   const toggleRow = useCallback((id: string) => {
     setSelected((current) => {
@@ -166,8 +163,8 @@ export function CaseListPage() {
 
   const exportRows = () => {
     const source = selected.size
-      ? selectCases(user!, undefined, teamMemberIds).filter((row) => selected.has(row.id))
-      : selectCases(user!, effective, teamMemberIds)
+      ? cases.filter((row) => selected.has(row.id))
+      : rows
     const csv = toCsv(
       ['Case number', 'Subject', 'Requestor', 'Department', 'Status', 'Priority', 'Submitted', 'Statutory due', 'Clock'],
       source.map((row) => [
@@ -202,17 +199,7 @@ export function CaseListPage() {
     if (!user || !viewName.trim()) return
     setBusy(true)
     try {
-      await saveView(
-        {
-          id: '',
-          name: viewName.trim(),
-          ownerId: user.id,
-          isShared: shareView,
-          filters: effective,
-          createdAt: new Date().toISOString(),
-        },
-        user.id,
-      )
+      await saveView({ name: viewName.trim(), isShared: shareView, filters: effective })
       refresh()
       toast.success('View saved', `"${viewName.trim()}" is now available on this page.`)
       setViewName('')
@@ -224,7 +211,7 @@ export function CaseListPage() {
 
   const removeView = async (view: SavedView) => {
     if (!user) return
-    await deleteView(view.id, user.id)
+    await deleteView(view.id)
     if (activeViewId === view.id) setActiveViewId(null)
     refresh()
     toast.info('View deleted', view.name)
@@ -282,7 +269,7 @@ export function CaseListPage() {
           {showFilters ? 'Hide filters' : 'Advanced filters'}
         </Button>
         <span className="ml-auto text-xs text-ink-500">
-          {query.isLoading ? 'Loading…' : `${total} ${total === 1 ? 'case' : 'cases'} match`}
+          {!query ? 'Loading…' : `${total} ${total === 1 ? 'case' : 'cases'} match`}
         </span>
       </div>
 
@@ -311,7 +298,7 @@ export function CaseListPage() {
 
       <Card>
         <CardBody className="p-0">
-          {query.isLoading && rows.length === 0 ? (
+          {!query && rows.length === 0 ? (
             <div className="p-5">
               <SkeletonTable rows={8} />
             </div>
@@ -371,17 +358,17 @@ export function CaseListPage() {
           onExport={exportRows}
           onAssign={(assigneeId) =>
             runBulk(
-              () => bulkUpdateCases([...selected], { assignedTo: assigneeId }, user.id),
+              () => updateCases([...selected], { assignedTo: assigneeId }),
               assigneeId ? 'Cases reassigned and the officer notified.' : 'Cases returned to the unassigned queue.',
             )
           }
           onStatus={(status) =>
             runBulk(
-              () => bulkUpdateCases([...selected], { status }, user.id),
+              () => updateCases([...selected], { status }),
               `Status set to ${STATUS_META[status].label}.`,
             )
           }
-          onTag={(tag) => runBulk(() => bulkAddTags([...selected], [tag], user.id), `Tag "${tag}" applied.`)}
+          onTag={(tag) => runBulk(() => addTags([...selected], [tag]), `Tag "${tag}" applied.`)}
         />
       ) : null}
 
@@ -417,7 +404,7 @@ export function CaseListPage() {
             description="Shared views appear for every colleague who can see this page."
           />
           <p className="text-xs text-ink-500">
-            {db.views.length} views are currently stored in this prototype.
+            {views.length} views are currently stored for your organisation.
           </p>
         </div>
       </Modal>

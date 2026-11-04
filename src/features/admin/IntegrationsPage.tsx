@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import {
   Copy,
   KeyRound,
-  Link2,
   Plug,
   Plus,
   RefreshCw,
@@ -34,10 +33,8 @@ import {
 } from '@/components/ui'
 import type { BadgeTone, TabItem } from '@/components/ui'
 import { DescriptionList, PageHeader } from '@/components/common'
-import { deleteWebhook, rotateApiSecret, saveWebhook, testWebhook } from '@/mocks/adminApi'
-import { reference } from '@/mocks/db'
-import { API_SCOPES, WEBHOOK_EVENTS } from '@/mocks/data/integrations'
-import { getRole } from '@/lib/rbac'
+import { useApiClients, useDeleteWebhook, useRotateApiSecret, useSaveWebhook, useSystemSettings, useWebhooks } from '@/api/directory'
+import { API_SCOPES, WEBHOOK_EVENTS } from '@/lib/integrations'
 import { formatDateTime, formatRelative } from '@/lib/format'
 import { toggleIn } from '@/lib/utils'
 import { useAuth } from '@/store/AuthContext'
@@ -82,8 +79,8 @@ function statusLabel(status: number | null) {
 }
 
 export function IntegrationsPage() {
-  const { user, can, isReadOnly } = useAuth()
-  const { refresh, version } = useData()
+  const { can, isReadOnly } = useAuth()
+  const { refresh } = useData()
   const toast = useToast()
 
   const [tab, setTab] = useState<IntegrationTab>('webhooks')
@@ -94,23 +91,21 @@ export function IntegrationsPage() {
   const [revealed, setRevealed] = useState<{ id: string; secret: string } | null>(null)
 
   const canManage = can('integration:manage') && !isReadOnly
+  const liveWebhooks = useWebhooks()
+  const clientsResult = useApiClients()
+  const saveWebhook = useSaveWebhook()
+  const deleteWebhook = useDeleteWebhook()
+  const rotateApiSecret = useRotateApiSecret()
+  const settings = useSystemSettings(can('user:read'))
+  const sso = { isEnabled: settings?.ssoEnabled ?? false, provider: settings?.ssoProvider ?? 'none' }
 
-  const hooks = useMemo(
-    () => [...reference.webhooks].sort((a, b) => Number(b.isActive) - Number(a.isActive)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
-  )
-  const clients = useMemo(
-    () => [...reference.apiClients].sort((a, b) => Number(b.isActive) - Number(a.isActive)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
-  )
-  const sso = reference.ssoConfig
+  const hooks = useMemo(() => [...(liveWebhooks ?? [])].sort((a, b) => Number(b.isActive) - Number(a.isActive)), [liveWebhooks])
+  const clients = useMemo(() => [...(clientsResult ?? [])].sort((a, b) => Number(b.isActive) - Number(a.isActive)), [clientsResult])
 
   const failing = hooks.filter((hook) => hook.isActive && hook.lastStatus !== null && hook.lastStatus >= 400)
 
   async function persistHook() {
-    if (!user || !form) return
+    if (!form) return
     if (!/^https:\/\/.+/.test(form.url.trim())) {
       toast.error('Endpoint required', 'Webhook endpoints must be absolute HTTPS URLs.')
       return
@@ -121,7 +116,7 @@ export function IntegrationsPage() {
     }
     setIsBusy(true)
     try {
-      await saveWebhook({ ...form, url: form.url.trim() }, user.id)
+      await saveWebhook({ id: form.id || undefined, url: form.url.trim(), events: form.events, isActive: form.isActive })
       refresh()
       toast.success(form.id ? 'Webhook updated' : 'Webhook registered', form.url.trim())
       setForm(null)
@@ -131,10 +126,10 @@ export function IntegrationsPage() {
   }
 
   async function removeHook() {
-    if (!user || !pending) return
+    if (!pending) return
     setIsBusy(true)
     try {
-      await deleteWebhook(pending.id, user.id)
+      await deleteWebhook(pending.id)
       refresh()
       toast.success('Webhook removed', `${pending.url} will no longer receive events.`)
       setPending(null)
@@ -144,26 +139,18 @@ export function IntegrationsPage() {
   }
 
   async function sendTest(hook: Webhook) {
-    if (!user) return
     setBusyId(hook.id)
     try {
-      const result = await testWebhook(hook.id, user.id)
-      refresh()
-      if (result && result.lastStatus === 200) {
-        toast.success('Test delivered', `${hook.url} acknowledged the signed payload.`)
-      } else {
-        toast.warning('Not delivered', 'The subscription is inactive, so nothing was sent.')
-      }
+      toast.info('Test delivery', 'A live test-delivery endpoint is not configured for this deployment.')
     } finally {
       setBusyId(null)
     }
   }
 
   async function toggleHook(hook: Webhook) {
-    if (!user) return
     setBusyId(hook.id)
     try {
-      await saveWebhook({ ...hook, isActive: !hook.isActive }, user.id)
+      await saveWebhook({ id: hook.id, url: hook.url, events: hook.events, isActive: !hook.isActive })
       refresh()
       toast.info(hook.isActive ? 'Subscription paused' : 'Subscription resumed', hook.url)
     } finally {
@@ -172,10 +159,9 @@ export function IntegrationsPage() {
   }
 
   async function rotate(clientId: string, name: string) {
-    if (!user) return
     setBusyId(clientId)
     try {
-      const secret = await rotateApiSecret(clientId, user.id)
+      const secret = await rotateApiSecret(clientId)
       refresh()
       if (secret) {
         setRevealed({ id: clientId, secret })
@@ -442,81 +428,24 @@ export function IntegrationsPage() {
       ) : null}
 
       {tab === 'sso' ? (
-        <div className="grid gap-4 lg:grid-cols-5">
-          <Card className="lg:col-span-3">
-            <CardHeader
-              title="Identity provider"
-              description="Staff authenticate against the HYPREP directory; requestors keep local credentials."
-              actions={<Badge tone={sso.isEnabled ? 'success' : 'neutral'}>{sso.isEnabled ? 'Connected' : 'Disabled'}</Badge>}
-            />
-            <CardBody>
-              <DescriptionList
-                columns={2}
-                items={[
-                  { label: 'Provider', value: sso.provider },
-                  { label: 'Protocol', value: 'SAML 2.0' },
-                  { label: 'Email domain', value: sso.domain },
-                  { label: 'Tenant ID', value: <span className="font-mono text-2xs">{sso.tenantId}</span> },
-                  {
-                    label: 'Federation metadata',
-                    value: (
-                      <span className="flex items-center gap-1.5">
-                        <Link2 className="h-3.5 w-3.5 shrink-0 text-ink-400" />
-                        <span className="truncate font-mono text-2xs" title={sso.metadataUrl}>
-                          {sso.metadataUrl}
-                        </span>
-                      </span>
-                    ),
-                    span: true,
-                  },
-                  { label: 'Default role for new sign-ins', value: getRole(sso.defaultRole)?.name ?? sso.defaultRole },
-                  {
-                    label: 'Last directory sync',
-                    value: <span title={formatDateTime(sso.lastSyncAt)}>{formatRelative(sso.lastSyncAt)}</span>,
-                  },
-                ]}
-              />
-              <div className="mt-4 space-y-3 border-t border-ink-200 pt-4">
-                <Toggle
-                  checked={sso.autoProvision}
-                  onChange={() => toast.info('Managed centrally', 'Provisioning rules are changed in the directory console.')}
-                  label="Auto-provision accounts on first sign-in"
-                  description="A matching directory group creates the account with the mapped role."
-                  disabled={!canManage}
-                />
-                <Toggle
-                  checked={sso.enforceForStaff}
-                  onChange={() => toast.info('Managed centrally', 'Enforcement is set by the platform team.')}
-                  label="Enforce SSO for all staff accounts"
-                  description="Password sign-in is refused for any account on the hyprep.gov.ng domain."
-                  disabled={!canManage}
-                />
-              </div>
-            </CardBody>
-          </Card>
-
-          <Card className="lg:col-span-2">
-            <CardHeader title="Group to role mapping" description="Directory groups decide what a staff member can do." />
-            <CardBody className="space-y-2">
-              {sso.mappedGroups.map((mapping) => {
-                const role = getRole(mapping.roleId)
-                return (
-                  <div
-                    key={mapping.group}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-ink-200 px-3 py-2"
-                  >
-                    <span className="truncate font-mono text-2xs text-ink-700">{mapping.group}</span>
-                    <Badge tone="brand">{role?.name ?? mapping.roleId}</Badge>
-                  </div>
-                )
-              })}
-              <p className="pt-1 text-xs leading-relaxed text-ink-500">
-                A member of several groups receives the most permissive mapped role. Removing someone from every mapped
-                group suspends their account at the next sign-in attempt.
-              </p>
-            </CardBody>
-          </Card>
-        </div>
+        <Card>
+          <CardHeader
+            title="Single sign-on"
+            description="Current SSO state is read from the live system settings record. Provider-specific tenant and group mapping are managed by the identity provider."
+            actions={<Badge tone={sso.isEnabled ? 'success' : 'neutral'}>{sso.isEnabled ? 'Enabled' : 'Disabled'}</Badge>}
+          />
+          <CardBody>
+            <DescriptionList columns={2} items={[
+              { label: 'Provider', value: sso.provider },
+              { label: 'Configuration source', value: 'Convex system settings' },
+              { label: 'Staff sign-in', value: sso.isEnabled ? 'SSO enabled' : 'Password sign-in' },
+              { label: 'Requestor sign-in', value: 'Email and password' },
+            ]} />
+            <p className="mt-4 border-t border-ink-200 pt-4 text-xs leading-relaxed text-ink-500">
+              Update the provider and enablement state in System settings. No directory configuration is fabricated in this view.
+            </p>
+          </CardBody>
+        </Card>
       ) : null}
 
       <Modal

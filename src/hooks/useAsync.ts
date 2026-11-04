@@ -8,8 +8,7 @@ export interface AsyncState<T> {
 }
 
 /**
- * Small query hook for the mock API. Every call is asynchronous on purpose so the
- * screens exercise their real loading and empty states before a backend exists.
+ * Small promise-backed hook for non-Convex client work such as debounced utilities.
  */
 export function useAsync<T>(factory: () => Promise<T>, deps: unknown[]): AsyncState<T> {
   const [data, setData] = useState<T | undefined>(undefined)

@@ -3,11 +3,11 @@ import { ShieldCheck } from 'lucide-react'
 import type { RoleId, User, UserStatus } from '@/types'
 import { Button, Drawer, Input, Select, Toggle } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
-import { createUser, updateUser } from '@/mocks/adminApi'
-import { reference } from '@/mocks/db'
+import { useCreateUser, useUpdateUser, EMPTY_REFERENCE } from '@/api/directory'
 import { ROLES, getRole } from '@/lib/rbac'
 import { useAuth } from '@/store/AuthContext'
 import { useToast } from '@/store/ToastContext'
+import { useData } from '@/store/DataContext'
 
 const ROLE_OPTIONS: SelectOption[] = ROLES.map((role) => ({ value: role.id, label: role.name }))
 
@@ -55,7 +55,10 @@ export function UserFormDrawer({
   onSaved: () => void
 }) {
   const { user: actor } = useAuth()
+  const { reference } = useData()
   const toast = useToast()
+  const createUser = useCreateUser()
+  const updateUser = useUpdateUser()
 
   const [form, setForm] = useState<FormState>(BLANK)
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({})
@@ -111,7 +114,6 @@ export function UserFormDrawer({
             status: form.status,
             mfaEnabled: form.mfaEnabled,
           },
-          actor.id,
         )
         toast.success('Account updated', `${form.name.trim()} was saved.`)
       } else {
@@ -126,7 +128,6 @@ export function UserFormDrawer({
             phone: form.phone.trim() || undefined,
             mfaEnabled: form.mfaEnabled,
           },
-          actor.id,
         )
         toast.success('Invitation sent', `${form.name.trim()} will receive an enrolment link by email.`)
       }
@@ -137,7 +138,7 @@ export function UserFormDrawer({
   }
 
   const role = getRole(form.roleId)
-  const departmentOptions: SelectOption[] = reference.departments.map((department) => ({
+  const departmentOptions: SelectOption[] = (reference ?? EMPTY_REFERENCE).departments.map((department) => ({
     value: department.name,
     label: department.name,
   }))

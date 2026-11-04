@@ -30,13 +30,12 @@ import {
   UserChip,
 } from '@/components/ui'
 import { PageHeader } from '@/components/common'
-import { bulkSetUserStatus, listUsers, resetUserMfa, setUserStatus } from '@/mocks/adminApi'
-import { reference } from '@/mocks/db'
+import { useBulkSetUserStatus, useResetUserMfa, useSetUserStatus, useUserDirectory } from '@/api/directory'
 import { ROLES } from '@/lib/rbac'
 import { ROLE_LABELS } from '@/lib/constants'
 import { formatDateTime, formatRelative } from '@/lib/format'
 import { downloadTextFile, toCsv, toggleIn } from '@/lib/utils'
-import { useAsync, useDebounced } from '@/hooks/useAsync'
+import { useDebounced } from '@/hooks/useAsync'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
 import { useToast } from '@/store/ToastContext'
@@ -60,8 +59,8 @@ const STATUS_ORDER: UserStatus[] = ['active', 'invited', 'suspended', 'locked']
 
 /** FR-001 / FR-004: the user directory with role, status and MFA administration. */
 export function UsersPage() {
-  const { user, can, isReadOnly } = useAuth()
-  const { version, refresh } = useData()
+  const { can, isReadOnly } = useAuth()
+  const { users, refresh } = useData()
   const toast = useToast()
 
   const [term, setTerm] = useState('')
@@ -75,23 +74,22 @@ export function UsersPage() {
 
   const debounced = useDebounced(term)
   const canWrite = can('user:write') && !isReadOnly
+  const setUserStatus = useSetUserStatus()
+  const bulkSetUserStatus = useBulkSetUserStatus()
+  const resetUserMfa = useResetUserMfa()
 
-  const result = useAsync(
-    () =>
-      listUsers({
-        q: debounced || undefined,
-        roleIds: roleIds.length ? roleIds : undefined,
-        statuses: statuses.length ? statuses : undefined,
-        page,
-        pageSize: 15,
-      }),
-    [debounced, roleIds, statuses, page, version],
-  )
+  const result = useUserDirectory({
+    q: debounced || undefined,
+    roleIds: roleIds.length ? roleIds : undefined,
+    statuses: statuses.length ? statuses : undefined,
+    page,
+    pageSize: 15,
+  })
 
-  const rows = result.data?.rows ?? []
+  const rows = result?.rows ?? []
 
   const stats = useMemo(() => {
-    const all = reference.users
+    const all = users
     return {
       total: all.length,
       active: all.filter((row) => row.status === 'active').length,
@@ -99,25 +97,23 @@ export function UsersPage() {
       restricted: all.filter((row) => row.status === 'suspended' || row.status === 'locked').length,
       mfa: all.filter((row) => row.mfaEnabled).length,
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version])
+  }, [users])
 
   const roleCounts = useMemo(() => {
     const map = new Map<RoleId, number>()
-    reference.users.forEach((row) => map.set(row.roleId, (map.get(row.roleId) ?? 0) + 1))
+    users.forEach((row) => map.set(row.roleId, (map.get(row.roleId) ?? 0) + 1))
     return map
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version])
+  }, [users])
 
   const allOnPageSelected = rows.length > 0 && rows.every((row) => selected.includes(row.id))
 
   const toggleAll = () => setSelected(allOnPageSelected ? [] : rows.map((row) => row.id))
 
   const applyStatus = async () => {
-    if (!pending || !user) return
+    if (!pending) return
     setBusy(true)
     try {
-      await setUserStatus(pending.user.id, pending.status, user.id)
+      await setUserStatus(pending.user.id, pending.status)
       refresh()
       toast.success(
         `${pending.user.name} ${pending.status === 'active' ? 'reinstated' : STATUS_LABELS[pending.status].toLowerCase()}`,
@@ -130,11 +126,11 @@ export function UsersPage() {
   }
 
   const bulk = async (status: UserStatus) => {
-    if (!user || selected.length === 0) return
+    if (selected.length === 0) return
     setBusy(true)
     try {
       const count = selected.length
-      await bulkSetUserStatus(selected, status, user.id)
+      await bulkSetUserStatus(selected, status)
       refresh()
       setSelected([])
       toast.success(`${count} account${count === 1 ? '' : 's'} updated`, `Status set to ${STATUS_LABELS[status]}.`)
@@ -144,8 +140,7 @@ export function UsersPage() {
   }
 
   const resetMfa = async (target: User) => {
-    if (!user) return
-    await resetUserMfa(target.id, user.id)
+    await resetUserMfa(target.id)
     refresh()
     toast.success('MFA reset', `${target.name} will be asked to re-enrol at next sign-in.`)
   }
@@ -155,7 +150,7 @@ export function UsersPage() {
       `hyprep-foi-users-${new Date().toISOString().slice(0, 10)}.csv`,
       toCsv(
         ['Name', 'Email', 'Role', 'Department', 'Status', 'MFA', 'Last login'],
-        reference.users.map((row) => [
+        users.map((row) => [
           row.name,
           row.email,
           ROLE_LABELS[row.roleId],
@@ -167,7 +162,7 @@ export function UsersPage() {
       ),
       'text/csv',
     )
-    toast.success('Directory exported', `${reference.users.length} accounts written to CSV.`)
+    toast.success('Directory exported', `${users.length} accounts written to CSV.`)
   }
 
   const resetFilters = () => {
@@ -279,7 +274,7 @@ export function UsersPage() {
 
       <Card>
         <CardBody className="p-0">
-          {rows.length === 0 && !result.isLoading ? (
+          {rows.length === 0 && result ? (
             <div className="p-5">
               <EmptyState
                 icon={<UsersIcon className="h-6 w-6" />}
@@ -404,11 +399,11 @@ export function UsersPage() {
         </CardBody>
       </Card>
 
-      {result.data && result.data.pageCount > 1 ? (
+      {result && result.pageCount > 1 ? (
         <Pagination
-          page={result.data.page}
-          pageSize={result.data.pageSize}
-          total={result.data.total}
+          page={result.page}
+          pageSize={result.pageSize}
+          total={result.total}
           onPageChange={setPage}
           label="accounts"
         />

@@ -1,292 +1,130 @@
-# HYPREP — Freedom of Information (FOI) Management System
+# HYPREP - Freedom of Information (FOI) Management System
 
-Frontend prototype for the Legal Unit of the **Hydrocarbon Pollution Remediation
-Project (HYPREP)**, built to the Terms of Reference for review before backend
-development begins.
+Production-grade FOI case management for the Legal Unit of the Hydrocarbon
+Pollution Remediation Project (HYPREP), built to the Terms of Reference.
 
-Every screen is complete and interactive. **All data is mock data** generated in
-the browser — there is no server, no database and no network call. See
-[What is mocked](#what-is-mocked) for exactly where the seam sits.
+The platform is backed by Convex and Better Auth. Cases, documents, notes,
+tasks, hearings, notifications, reports, settings and audit records are read
+from and written to the configured deployment. The frontend does not include a
+mock-data fallback.
 
-- **Theme:** Nigerian green (`#008751`) and white, with the Coat of Arms as the logo
-- **Statutory basis:** Freedom of Information Act 2011 — 7-day response window,
-  section 6 extension, section 18 severance, section 20 judicial review
-- **Locale:** English (Nigeria), Africa/Lagos timezone, WCAG 2.1 AA target
+- Theme: Nigerian green (`#008751`) and white, with the Coat of Arms as the logo
+- Statutory basis: Freedom of Information Act 2011
+- Locale: English (Nigeria), Africa/Lagos timezone
+- Accessibility target: WCAG 2.1 AA
 
----
-
-## Running it
+## Running locally
 
 ```bash
 npm install
-npm run dev          # http://localhost:5173
+npm run dev
 ```
 
-Other scripts:
+Copy `.env.example` to `.env.local` and set `VITE_CONVEX_URL` to the URL for the
+Convex deployment. Configure the server-side Better Auth and integration
+secrets with `npx convex env set`.
 
-| Script | What it does |
+Useful commands:
+
+| Command | Purpose |
 | --- | --- |
-| `npm run dev` | Vite dev server with hot reload |
-| `npm run build` | Type-checks and produces the production bundle in `dist/` |
-| `npm run preview` | Serves the built bundle |
-| `npm run typecheck` | `tsc --noEmit` over the app and the node configs |
-| `npm run smoke` | Loads every module through Vite's SSR pipeline and renders all public screens — catches circular imports and barrel mistakes a typecheck cannot see |
-| `npm run verify` | typecheck → smoke → build, in order |
+| `npm run dev` | Start the Vite development server. |
+| `npm run typecheck` | Type-check the app and Node configuration. |
+| `npm run smoke` | Load the live adapters and feature module graph through Vite SSR. |
+| `npm run build` | Produce the production bundle. |
+| `npm run verify` | Run typecheck, smoke and build in sequence. |
+| `npm run check:backend` | Check the Convex source surface. |
 
-Requires Node 18+.
+Requires Node 18 or newer.
 
----
+## Authentication and initial data
 
-## Signing in
+Authentication uses Better Auth through Convex. Email/password sign-in,
+registration, password recovery, MFA and optional Microsoft Entra ID SSO use the
+configured backend; there are no demo accounts, fixed passwords or role
+switchers in the application.
 
-The login screen carries a **demo account picker** — one click signs you in as any
-role, no typing. That is the fastest way to walk a reviewer through the system.
+On a new deployment, initialize the reference data and optional commissioning
+administrator with:
 
-To use the form instead: enter the email below with **any password of 4+
-characters**. Accounts with MFA enabled then ask for a code — the demo code is
-`123456`, shown as a hint under the field. **Continue with Microsoft Entra ID**
-signs you in as the Head of Legal Unit.
+```bash
+npx convex run seed:run
+```
 
-| Role | Email | Lands on |
-| --- | --- | --- |
-| Super-Admin | `ibrahim.sanusi@hyprep.gov.ng` | `/dashboard/system` |
-| Admin | `adaeze.nwachukwu@hyprep.gov.ng` | `/dashboard/admin` |
-| Legal Unit | `ngozi.okonkwo@hyprep.gov.ng` | `/dashboard/legal` |
-| Clerk / Support | `blessing.amadi@hyprep.gov.ng` | `/dashboard/legal` |
-| Requestor | `nnimmo@healthofmotherearth.org` | `/my-requests` |
-| Auditor (read-only) | `c.idowu@auditor-general.gov.ng` | `/dashboard/audit` |
-| External Stakeholder | `u.nnamdi@nnamdichambers.ng` | `/my-requests` |
+The seed command is a one-time database initialization for roles, departments,
+courts, taxonomy and system settings. It is not used as a runtime data source.
 
-Once inside, **Switch account** in the profile menu (`/switch-account`) hops
-between roles without signing out — useful in a live demo. The topbar also
-carries a role switcher for the same purpose.
+## Main capabilities
 
-### What each role proves
+- Request intake with statutory due dates and requestor self-service
+- Server-scoped case lists, review queues, assignments, status changes, appeals
+  and closure
+- Convex file storage with document versions, signed preview URLs, redaction and
+  access logging
+- Internal/public notes, tasks, timeline events and linked cases
+- Live court diary, hearing outcomes and reminders
+- Live dashboards, statutory reports, custom report builder and CSV exports
+- User, role, organisation, system settings, integrations and bulk import
+- Permission-scoped global search and immutable audit/access views
+- Notification preferences, email/SMS/webhook actions and scheduled jobs
 
-- **Super-Admin** — system dashboard, settings, monitoring, backups, retention,
-  API clients and webhooks, bulk import
-- **Admin** — user directory, invitations, roles and permissions, organisation
-  reference data, assignment and moderation
-- **Legal Unit** — legal dashboard, review queue, case work, redaction, templates
-  and letter generation, court diary, reports
-- **Clerk / Support** — registry work: intake, document upload, scheduling, data
-  entry, no determinations
-- **Requestor** — the public-facing portal: submit a request, track it against the
-  statutory clock, read the response, appeal
-- **Auditor** — the same breadth of read access with **every write control absent**
-  (not merely disabled); audit trail and access logs
-- **External Stakeholder** — external counsel, scoped to assigned litigation
+## Role model
 
-Role scoping is enforced in one place. `src/lib/rbac.ts` holds the permission
-catalogue and the seven role definitions; the sidebar, the command palette, the
-404 page's suggestions and the route guards all read the same filter, so they
-cannot disagree about who sees what. A blocked route renders a **403 explainer in
-place** rather than redirecting, so the address bar still shows what was
-attempted and the page names the permission you would need.
+The seven roles are defined in `src/lib/rbac.ts` and enforced again in
+`convex/lib/permissions.ts`:
 
----
-
-## A five-minute tour
-
-A route worth walking in this order when presenting:
-
-1. **`/login`** — split-screen sign-in with the Coat of Arms, SSO button, MFA step
-   and the demo picker. (ToR wireframe 1)
-2. **Super-Admin → `/dashboard/system`** — organisation-wide KPIs, SLA compliance,
-   request volume trend, system health. (Wireframe 2)
-3. **Admin → `/admin/users`** and **`/admin/roles`** — directory with bulk select,
-   invitations, and the permission matrix. (Wireframe 3)
-4. **Legal → `/dashboard/legal`** — my queue, overdue and due-soon cards, hearings
-   this week, workload by officer. (Wireframe 4)
-5. **`/cases`** — the case list: colour-coded status, saved views, advanced
-   filters, bulk operations, CSV export. (Wireframe 5)
-6. **`/cases/case-0042`** — the case file: timeline, documents with version
-   history and a preview drawer, internal vs public notes, tasks, linked cases,
-   SLA panel, closure. (Wireframe 6)
-7. **`/court`** — the court diary in month, week and day views; click a hearing for
-   the brief, counsel, reminders and outcome. (Wireframe 7)
-8. **`/reports`** then **`/reports/builder`** — predefined statutory reports and
-   the drag-free custom builder with grouping, filters and scheduling. (Wireframe 8)
-9. **`/search`** — global search across cases, documents, notes and people, with
-   type facets and highlighted matches. (Wireframe 9)
-10. **Auditor → `/audit`** — the immutable trail, then `/audit/access` for document
-    access logs. Note the absence of every write control.
-
-Press <kbd>Ctrl</kbd>+<kbd>K</kbd> anywhere for the command palette. The **New FOI case** button in the
-topbar (it reads **New request** for requestors) is the quick-create the ToR asks
-for.
-
----
-
-## Requirement coverage
-
-Where each ToR requirement group lives in the code.
-
-| ToR | Requirement | Where |
-| --- | --- | --- |
-| FR-001–003 | User accounts, authentication, RBAC | `src/lib/rbac.ts`, `src/store/AuthContext.tsx`, `src/app/guards.tsx`, `/admin/users`, `/admin/roles` |
-| FR-004–005 | Profile self-service, MFA, password policy | `/profile`, `/system/settings` |
-| FR-006 | Audit of account activity | `/audit` |
-| FR-010–013 | Request intake, auto case creation, acknowledgement, assignment | `/requests/new`, `/cases/new`, `/review-queue` |
-| FR-014–015 | Response upload and document versioning | case file → Documents tab, `/documents` |
-| FR-016–017 | Status updates and SLA timers | `src/lib/sla.ts`, status cards on every dashboard |
-| FR-020 | Case dashboard | `/cases` |
-| FR-021 | Case detail with timeline | `/cases/:id` → Timeline tab (`src/mocks/data/timeline.ts`) |
-| FR-022–023 | Internal notes, mentions, tagging | case file → Notes tab |
-| FR-024–025 | Case linking and closure | case file → Linked cases, Close case |
-| FR-030–031 | Legal dashboard and review queue | `/dashboard/legal`, `/review-queue` |
-| FR-032 | Document redaction | case file → Documents → Redact |
-| FR-033 | Templates and letter generation | `/templates` |
-| FR-034–036 | Court scheduling, reminders, outcomes | `/court`, `/court/:hearingId` |
-| FR-041 | Advanced filters and saved views | `/cases` filter bar and `SavedViewBar` |
-| FR-044 | CSV import with column mapping | `/admin/import` |
-| FR-045, FR-051 | Bulk operations | `BulkActionBar` on `/cases` and `/admin/users` |
-| FR-046 | Exports | `toCsv` in `src/lib/utils.ts`, export buttons on lists and reports |
-| FR-050–054 | Reports, builder, schedules | `/reports`, `/reports/builder` |
-| FR-060–063 | Notifications, preferences, help | `/notifications`, `/profile` → Notifications, `/help` |
-| FR-070–073 | Document store, integrations, access logs | `/documents`, `/admin/integrations`, `/audit/access` |
-
----
+- Super-Admin: platform settings, monitoring, backups and integrations
+- Admin: users, roles, reference data and assignment
+- Legal Unit: casework, review, documents, templates, court and reports
+- Clerk / Support: registry intake, documents and scheduling
+- Requestor: submit and track owned requests, responses and appeals
+- Auditor: read-only audit and operational access
+- External Stakeholder: scoped access to assigned litigation
 
 ## Project structure
 
-```
+```text
 src/
-  app/          Entry, router, route guards, provider tree
-  assets/       Coat of Arms and brand marks
-  components/
-    ui/         Primitives — buttons, tables, badges, drawers, forms (63 exports)
-    charts/     Recharts wrappers with the brand palette
-    common/     Page furniture — headers, empty states, filter bars
-    layout/     AppShell, Sidebar, Topbar, CommandPalette, NotificationBell
-  features/     One folder per module: auth, dashboard, cases, court, documents,
-                templates, reports, search, notifications, profile, admin, misc
-  hooks/        useAsync, useDebounced
-  lib/          rbac, navigation, sla, constants, format, utils
-  mocks/        Seeded data generators and the fake API layer
-  store/        AuthContext, DataContext, ToastContext
-  types/        Shared domain types
-scripts/
-  smoke.mjs     Import + render smoke test
+  app/          Entry, router, route guards and provider tree
+  api/          Typed adapters for live Convex queries and mutations
+  components/   UI primitives, charts, layout and shared page furniture
+  features/     Auth, dashboard, cases, court, documents, reports and admin
+  hooks/        Debounced values and asynchronous UI helpers
+  lib/          RBAC, navigation, SLA, constants, formatting and utilities
+  store/        AuthContext, DataContext and ToastContext
+  types/        Shared frontend domain types
+convex/
+  schema.ts     Application schema
+  queries/      Permission-scoped reads
+  mutations/    Transactional writes
+  actions/      Email, SMS, storage and processing integrations
+  crons.ts      Scheduled SLA, reminder, retention and delivery jobs
+scripts/        Smoke and backend checks
 ```
 
-Two files are worth reading first, because everything else follows from them:
+## Backend setup
 
-- **`src/lib/navigation.ts`** — the single source of truth for navigation. Each
-  entry declares its route, icon and required permission. The sidebar, command
-  palette and 404 suggestions all render from this array, and every guarded route
-  in `src/app/router.tsx` declares the same permission its nav entry declares.
-- **`src/lib/rbac.ts`** — the permission catalogue (10 groups) and the seven roles.
+Convex contains the schema, reactive queries, mutations, actions, cron jobs,
+HTTP API and file storage. Better Auth owns authentication tables and the app
+user profile is linked through `authUserId`.
 
-Pages are lazy-loaded per feature barrel, so opening the court diary does not
-download the report builder.
+Set these values for a real deployment as applicable:
 
-## What is mocked
+- `VITE_CONVEX_URL` and `VITE_CONVEX_SITE_URL` for the browser
+- `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` and `FRONTEND_ORIGINS`
+- Entra ID credentials when staff SSO is enabled
+- Resend, Termii, ClamAV, OCR, document encryption, webhook and monitoring
+  credentials for the corresponding integrations
 
-There is no backend. The seam a real API would slot into is:
-
-- **`src/mocks/db.ts`** — builds the whole dataset once at module load from
-  deterministic seeded generators (`seededRandom`), so every reload shows the same
-  96 cases, users, documents, notes, hearings, logs and notifications. Dates are
-  relative to today, which keeps SLA states, overdue queues and "hearings this
-  week" believable whenever the prototype is opened.
-- **`src/mocks/api.ts`**, **`adminApi.ts`**, **`importApi.ts`** — promise-returning
-  functions with a small artificial delay, shaped the way the real endpoints should
-  be shaped. Replacing these with `fetch` calls is the backend integration.
-- **`src/mocks/metrics.ts`** — derives every dashboard figure from the dataset, so
-  the numbers on the dashboards always reconcile with the case list.
-
-Consequences a reviewer should know:
-
-- **Writes are in-memory.** Creating a case, adding a note or closing a case updates
-  the live dataset and the UI, but a **browser reload resets everything**. Only the
-  signed-in session and sidebar state persist (`localStorage`).
-- **Uploads are simulated.** File pickers accept a file and record realistic
-  metadata — name, size, version, checksum, virus-scan and OCR status — but nothing
-  is transmitted or stored. Document previews render a representative page, not
-  your file.
-- **Nothing is sent.** No email, SMS or webhook leaves the browser; notifications
-  are generated locally. Exports (CSV) are produced client-side and do download.
-- **Timeline is derived, not seeded** (`src/mocks/data/timeline.ts`) — assembled
-  from the records that already exist on a case, so it can never contradict them.
-
----
-
-## Accessibility and responsiveness
-
-Built towards the WCAG 2.1 AA target the ToR sets. What is in place:
-
-- A skip link to `#main-content`, semantic landmarks, and one `h1` per page
-  (rendered by `PageHeader`, so it cannot be forgotten)
-- Every interactive control is keyboard reachable with a visible focus ring.
-  Modals move focus into the dialog on open; modals, drawers and dropdowns close
-  on <kbd>Esc</kbd> and lock background scroll
-- Status is never carried by colour alone — every status badge pairs its colour
-  with a dot and a text label, and icons that carry no meaning are `aria-hidden`
-- Form controls go through one `Field` scaffold: real `<label htmlFor>`,
-  `aria-invalid` on error, and `aria-describedby` pointing at the hint or the
-  error message, which is announced with `role="alert"`
-- Tables use `scope="col"` headers, and bulk-select checkboxes carry per-row
-  accessible names
-- Toasts and loading states announce through `aria-live`
-- Brand green `#008751` on white clears 4.5:1, and the green panels — the
-  navigation rail and the sign-in canvas — sit at `brand-600` (`#007546`) where
-  white text reaches 5.8:1 and the `brand-50`/`brand-100` supporting copy 4.7:1
-  or better. The palette in `tailwind.config.js` was chosen for contrast as well
-  as for looks
-
-Not yet done, and worth knowing before an accessibility review: dialogs move focus
-in but do not yet cycle <kbd>Tab</kbd> within themselves, and no assistive-technology
-pass has been run — only keyboard and contrast checks.
-
-Layout is responsive from 360 px up, and the chrome owns the viewport: the shell is
-exactly one screen tall, so the navigation rail and the utility bar never scroll
-away and `#main-content` is the only thing that moves. The rail collapses to
-centred icons from the topbar toggle — each one labelled by a tooltip that escapes
-its scroll container — and becomes a slide-in sheet below `lg`.
-
-Tables scroll inside their own box in both directions, with the column headers
-pinned to the top of that box. However long a register is, the header row, the tab
-strip and the bulk-action bar stay where you can reach them. The court diary offers
-day and week views for narrow screens where the month grid is too dense.
+Do not deploy with placeholder secrets. If Convex is unavailable, the UI keeps
+the live loading/error state and never substitutes fabricated records.
 
 ## Verification
 
-Three checks run clean on the committed tree:
-
 ```bash
-npm run typecheck   # tsc --noEmit, strict, with noUnusedLocals/noUnusedParameters
-npm run smoke       # 26 modules load; all public screens server-render
-npm run build       # production bundle, code-split per feature
+npm run typecheck
+npm run smoke
+npm run build
 ```
 
-`npm run verify` runs all three in order.
-
-## Notes for the backend phase
-
-Things deliberately left for the real implementation, so they are not mistaken for
-gaps:
-
-- **Authentication** is simulated. Any password of 4+ characters signs you in and
-  the MFA code is fixed at `123456`. Real sign-in, token refresh, session
-  revocation and password rotation belong to the backend; the frontend already has
-  the states for each (MFA challenge, suspended, invited, expired session).
-- **SSO** returns a fixed staff account. The Entra ID redirect, claim mapping and
-  group-to-role mapping are backend concerns; `/admin/integrations` shows where the
-  configuration surfaces.
-- **Server-side pagination, sorting and search.** Lists currently filter the
-  in-memory dataset. `listCases` already takes the shape of a paged query, so the
-  swap is contained.
-- **Redaction** records severances and their statutory grounds against a document,
-  but burning redactions into a PDF must happen server-side so the original is
-  never shipped to the client.
-- **Notifications** are generated locally. Email, SMS and webhook delivery, plus the
-  quiet-hours and digest scheduling shown in `/profile`, need a job runner.
-- **Audit trail immutability.** The UI treats the trail as append-only; enforcement
-  (write-once storage, hash chaining) is a backend guarantee.
-- **File storage, virus scanning and OCR** are represented by status fields only.
-
----
-
-*Prototype for review. Not a live system — no real FOI request is received,
-processed or answered here.*
+`npm run verify` runs all three checks in sequence.

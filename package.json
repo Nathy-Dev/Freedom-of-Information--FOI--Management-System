@@ -3,34 +3,47 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Freedom of Information (FOI) Management System - Legal Unit, HYPREP. Frontend prototype with mock data.",
+  "description": "Freedom of Information (FOI) Management System - Legal Unit, HYPREP. Convex-backed live platform.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "smoke": "node scripts/smoke.mjs",
+    "check:backend": "node scripts/backend-check.mjs",
     "verify": "npm run typecheck && npm run smoke && npm run build"
   },
   "dependencies": {
+    "@convex-dev/better-auth": "^0.12.5",
+    "@convex-dev/rate-limiter": "^0.3.2",
+    "@types/qrcode": "^1.5.5",
+    "better-auth": "1.6.15",
     "clsx": "^2.1.1",
+    "convex": "^1.45.0",
+    "convex-helpers": "^0.1.123",
     "date-fns": "^3.6.0",
     "lucide-react": "^0.445.0",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
     "recharts": "^2.12.7",
-    "tailwind-merge": "^2.5.2"
+    "resend": "^6.24.0",
+    "tailwind-merge": "^2.5.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/react": "^18.3.10",
+    "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^22.7.4",
+    "@types/react": "^18.3.10",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.20",
+    "convex-test": "^0.0.56",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.5.4",
-    "vite": "^5.4.8"
+    "vite": "^5.4.8",
+    "vitest": "^4.1.11"
   }
 }

@@ -13,8 +13,7 @@ import {
 } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
 import { DescriptionList } from '@/components/common'
-import { recordCourtOutcome } from '@/mocks/api'
-import { db, userName } from '@/mocks/db'
+import { useRecordCourtOutcome } from '@/api/court'
 import { COURT_STATUS_META, HEARING_TYPE_LABELS } from '@/lib/constants'
 import { formatClock, formatDate, formatDateTime } from '@/lib/format'
 import { useAuth } from '@/store/AuthContext'
@@ -34,7 +33,8 @@ export interface HearingDrawerProps {
 /** FR-036: record what the court did, and the direction it gave, against the hearing. */
 export function HearingDrawer({ hearing, onClose, canRecord = false }: HearingDrawerProps) {
   const { user } = useAuth()
-  const { refresh } = useData()
+  const { cases, usersById, refresh } = useData()
+  const recordCourtOutcome = useRecordCourtOutcome()
   const toast = useToast()
 
   const [status, setStatus] = useState<CourtDateStatus>('held')
@@ -51,7 +51,7 @@ export function HearingDrawer({ hearing, onClose, canRecord = false }: HearingDr
 
   if (!hearing) return null
 
-  const foiCase = db.cases.find((item) => item.id === hearing.caseId)
+  const foiCase = cases.find((item) => item.id === hearing.caseId)
   const isPast = new Date(`${hearing.date}T23:59:59`) < new Date()
 
   const save = async () => {
@@ -61,11 +61,7 @@ export function HearingDrawer({ hearing, onClose, canRecord = false }: HearingDr
     }
     setBusy(true)
     try {
-      await recordCourtOutcome(
-        hearing.id,
-        { status, outcome: outcome.trim(), nextActionDue: nextAction || null },
-        user.id,
-      )
+      await recordCourtOutcome(hearing.id, status, outcome.trim(), nextAction || undefined)
       refresh()
       toast.success('Outcome recorded', `${hearing.suitNumber} updated to ${COURT_STATUS_META[status].label}.`)
       onClose()
@@ -134,7 +130,7 @@ export function HearingDrawer({ hearing, onClose, canRecord = false }: HearingDr
               value: (
                 <span className="flex items-start gap-1.5">
                   <Users className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-400" />
-                  {hearing.counselIds.map((id) => userName(id)).join(', ') || 'Not assigned'}
+                  {hearing.counselIds.map((id) => usersById.get(id)?.name ?? id).join(', ') || 'Not assigned'}
                 </span>
               ),
             },

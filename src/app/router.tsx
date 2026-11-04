@@ -12,7 +12,6 @@ import { HomeRedirect, RequireAnonymous, RequireAuth, RequirePermission } from '
 const LoginPage = lazy(() => import('@/features/auth').then((m) => ({ default: m.LoginPage })))
 const RegisterPage = lazy(() => import('@/features/auth').then((m) => ({ default: m.RegisterPage })))
 const ForgotPasswordPage = lazy(() => import('@/features/auth').then((m) => ({ default: m.ForgotPasswordPage })))
-const SwitchAccountPage = lazy(() => import('@/features/auth').then((m) => ({ default: m.SwitchAccountPage })))
 
 const SystemDashboard = lazy(() => import('@/features/dashboard').then((m) => ({ default: m.SystemDashboard })))
 const AdminDashboard = lazy(() => import('@/features/dashboard').then((m) => ({ default: m.AdminDashboard })))
@@ -347,7 +346,6 @@ export function AppRoutes() {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/help" element={<HelpPage />} />
-            <Route path="/switch-account" element={<SwitchAccountPage />} />
 
             <Route path="/403" element={<ForbiddenPage />} />
             <Route path="*" element={<NotFoundPage />} />

@@ -27,8 +27,7 @@ import {
 } from '@/components/ui'
 import type { TabItem } from '@/components/ui'
 import { PageHeader } from '@/components/common'
-import { assignCase, changeCaseStatus, selectCases } from '@/mocks/api'
-import { db, usersById } from '@/mocks/db'
+import { useAssignCase, useChangeStatus } from '@/api/cases'
 import { CONCLUDED_STATUSES } from '@/lib/constants'
 import { computeSla } from '@/lib/sla'
 import { formatDate, formatRelative } from '@/lib/format'
@@ -44,8 +43,10 @@ type QueueTab = 'triage' | 'mine' | 'approval' | 'overdue'
  */
 export function ReviewQueuePage() {
   const { user } = useAuth()
-  const { version, refresh, teamMemberIds } = useData()
+  const { cases, documents, usersById, refresh } = useData()
   const toast = useToast()
+  const assignCase = useAssignCase()
+  const changeCaseStatus = useChangeStatus()
 
   const [tab, setTab] = useState<QueueTab>('triage')
   const [term, setTerm] = useState('')
@@ -53,7 +54,7 @@ export function ReviewQueuePage() {
 
   const buckets = useMemo(() => {
     if (!user) return null
-    const rows = selectCases(user, undefined, teamMemberIds)
+    const rows = cases
     const live = rows.filter((row) => !CONCLUDED_STATUSES.includes(row.status))
 
     return {
@@ -62,15 +63,14 @@ export function ReviewQueuePage() {
       approval: live.filter(
         (row) =>
           row.status === 'responded' ||
-          db.documents.some((doc) => doc.caseId === row.id && doc.kind === 'response' && !doc.isPublic),
+          documents.some((doc) => doc.caseId === row.id && doc.kind === 'response' && !doc.isPublic),
       ),
       overdue: live.filter((row) => {
         const state = computeSla(row).state
         return state === 'overdue' || state === 'due_soon'
       }),
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, version, teamMemberIds])
+  }, [cases, documents, user])
 
   const rows = useMemo(() => {
     if (!buckets) return []
@@ -102,8 +102,8 @@ export function ReviewQueuePage() {
     if (!user) return
     setBusyId(row.id)
     try {
-      await assignCase(row.id, user.id, user.id)
-      if (row.status === 'filed') await changeCaseStatus(row.id, 'in_review', user.id, 'Claimed from the triage queue.')
+      await assignCase(row.id, user.id)
+      if (row.status === 'filed') await changeCaseStatus(row.id, 'in_review', 'Claimed from the triage queue.')
       refresh()
       toast.success(`${row.caseNumber} assigned to you`, 'The case now sits in My reviews.')
     } finally {
@@ -116,7 +116,7 @@ export function ReviewQueuePage() {
     setBusyId(row.id)
     try {
       const next = row.status === 'filed' ? 'in_review' : 'responded'
-      await changeCaseStatus(row.id, next, user.id, 'Advanced from the review queue.')
+      await changeCaseStatus(row.id, next, 'Advanced from the review queue.')
       refresh()
       toast.success(`${row.caseNumber} moved on`, `Status is now ${next.replace('_', ' ')}.`)
     } finally {

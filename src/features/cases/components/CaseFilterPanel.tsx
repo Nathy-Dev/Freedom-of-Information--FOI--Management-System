@@ -15,7 +15,8 @@ import {
   SLA_META,
   STATUS_META,
 } from '@/lib/constants'
-import { reference } from '@/mocks/db'
+import { useData } from '@/store/DataContext'
+import { EMPTY_REFERENCE } from '@/api/directory'
 
 export interface CaseFilterPanelProps {
   filters: CaseFilters
@@ -54,11 +55,13 @@ export function CaseFilterPanel({
   onReset,
   showAssignee = true,
 }: CaseFilterPanelProps) {
+  const { reference } = useData()
+  const liveReference = reference ?? EMPTY_REFERENCE
   const assigneeOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: 'Anyone' },
       { value: 'unassigned', label: 'Unassigned' },
-      ...reference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name })),
+      ...liveReference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name })),
     ],
     [],
   )
@@ -66,7 +69,7 @@ export function CaseFilterPanel({
   const departmentOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: 'All departments' },
-      ...reference.departments.map((dept) => ({ value: dept.name, label: dept.name })),
+      ...liveReference.departments.map((dept) => ({ value: dept.name, label: dept.name })),
     ],
     [],
   )
@@ -152,7 +155,7 @@ export function CaseFilterPanel({
       <fieldset className="space-y-2">
         <legend className="text-2xs font-semibold uppercase tracking-wide text-ink-500">Tags</legend>
         <div className="flex flex-wrap gap-1.5">
-          {reference.tags.map((tag) => (
+          {liveReference.tags.map((tag) => (
             <ChoiceChip
               key={tag.id}
               selected={Boolean(filters.tags?.includes(tag.label))}

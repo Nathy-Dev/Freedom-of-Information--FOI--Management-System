@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Eye, FileArchive, FileText, Filter, HardDrive, ScanLine, ShieldCheck } from 'lucide-react'
 import type { DocumentKind, FoiDocument } from '@/types'
@@ -26,11 +26,10 @@ import {
 } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { DocumentPreviewDrawer } from './components/DocumentPreviewDrawer'
-import { listDocuments } from '@/mocks/api'
-import { db, userName } from '@/mocks/db'
+import { useDocument, useDocuments } from '@/api/documents'
 import { DOCUMENT_KIND_META, OCR_LABELS } from '@/lib/constants'
 import { formatBytes, formatDate, formatRelative } from '@/lib/format'
-import { useAsync, useDebounced } from '@/hooks/useAsync'
+import { useDebounced } from '@/hooks/useAsync'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
 
@@ -46,7 +45,7 @@ const KIND_ORDER: DocumentKind[] = [
 /** FR-031/FR-033: the document library across every case in the user's scope. */
 export function DocumentsPage() {
   const { can } = useAuth()
-  const { version } = useData()
+  const { cases, documents, usersById } = useData()
 
   const [term, setTerm] = useState('')
   const [kinds, setKinds] = useState<DocumentKind[]>([])
@@ -54,9 +53,12 @@ export function DocumentsPage() {
   const [page, setPage] = useState(1)
   const { documentId } = useParams()
   const navigate = useNavigate()
-  const [selected, setSelected] = useState<FoiDocument | null>(
-    () => (documentId ? (db.documents.find((doc) => doc.id === documentId) ?? null) : null),
-  )
+  const [selected, setSelected] = useState<FoiDocument | null>(null)
+  const deepLinked = useDocument(documentId, Boolean(documentId))
+
+  useEffect(() => {
+    if (documentId) setSelected(deepLinked ?? null)
+  }, [deepLinked, documentId])
 
   /** Closing the drawer drops the deep-link segment so the URL stays honest. */
   function closePreview() {
@@ -66,20 +68,16 @@ export function DocumentsPage() {
 
   const debounced = useDebounced(term, 250)
 
-  const result = useAsync(
-    () =>
-      listDocuments({
-        q: debounced,
-        kinds: kinds.length ? kinds : undefined,
-        redactedOnly: redactedOnly || undefined,
-        page,
-        pageSize: 15,
-      }),
-    [debounced, kinds, redactedOnly, page, version],
-  )
+  const result = useDocuments({
+    q: debounced,
+    kinds: kinds.length ? kinds : undefined,
+    redactedOnly: redactedOnly || undefined,
+    page,
+    pageSize: 15,
+  })
 
   const stats = useMemo(() => {
-    const rows = db.documents
+    const rows = documents
     return {
       total: rows.length,
       published: rows.filter((doc) => doc.isPublic).length,
@@ -88,8 +86,7 @@ export function DocumentsPage() {
       bytes: rows.reduce((sum, doc) => sum + doc.fileSize, 0),
       legalHold: rows.filter((doc) => doc.retentionLabel.startsWith('Legal hold')).length,
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version])
+  }, [documents])
 
   const toggleKind = (kind: DocumentKind) =>
     setKinds((current) => {
@@ -138,7 +135,7 @@ export function DocumentsPage() {
       <Card>
         <CardHeader
           title="Library"
-          description={`${result.data?.total ?? 0} document${(result.data?.total ?? 0) === 1 ? '' : 's'} match the current filters.`}
+          description={`${result?.total ?? 0} document${(result?.total ?? 0) === 1 ? '' : 's'} match the current filters.`}
           actions={
             <SearchInput
               value={term}
@@ -194,9 +191,9 @@ export function DocumentsPage() {
         </CardBody>
 
         <CardBody className="p-0">
-          {result.isLoading && !result.data ? (
+          {!result ? (
             <SkeletonTable rows={8} />
-          ) : (result.data?.rows.length ?? 0) === 0 ? (
+          ) : (result?.rows.length ?? 0) === 0 ? (
             <EmptyState
               icon={<FileText className="h-6 w-6" />}
               title="No documents match"
@@ -218,8 +215,8 @@ export function DocumentsPage() {
                   </Tr>
                 </Thead>
                 <Tbody>
-                  {result.data?.rows.map((doc) => {
-                    const foiCase = db.cases.find((item) => item.id === doc.caseId)
+                  {result?.rows.map((doc) => {
+                    const foiCase = cases.find((item) => item.id === doc.caseId)
                     return (
                       <Tr key={doc.id}>
                         <Td>
@@ -266,7 +263,7 @@ export function DocumentsPage() {
                           <span className="block text-xs text-ink-400">until {formatDate(doc.retainUntil)}</span>
                         </Td>
                         <Td className="whitespace-nowrap">
-                          <span className="text-xs text-ink-600">{userName(doc.uploadedBy)}</span>
+                          <span className="text-xs text-ink-600">{usersById.get(doc.uploadedBy)?.name ?? doc.uploadedBy}</span>
                           <span className="block text-xs text-ink-400">{formatRelative(doc.createdAt)}</span>
                         </Td>
                         <Td className="text-right">
@@ -282,11 +279,11 @@ export function DocumentsPage() {
             </TableWrap>
           )}
         </CardBody>
-        {result.data && result.data.pageCount > 1 ? (
+        {result && result.pageCount > 1 ? (
           <Pagination
-            page={result.data.page}
-            total={result.data.total}
-            pageSize={result.data.pageSize}
+            page={result.page}
+            total={result.total}
+            pageSize={result.pageSize}
             label="documents"
             onPageChange={setPage}
           />
@@ -295,7 +292,7 @@ export function DocumentsPage() {
 
       <p className="flex items-center gap-1.5 text-xs text-ink-500">
         <HardDrive className="h-3.5 w-3.5" />
-        Files are encrypted at rest in the production deployment. This prototype stores only mock metadata.
+        Files are encrypted at rest in the production deployment. Metadata and file content are served from Convex storage.
       </p>
 
       <DocumentPreviewDrawer

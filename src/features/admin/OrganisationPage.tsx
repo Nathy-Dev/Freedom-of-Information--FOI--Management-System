@@ -23,8 +23,7 @@ import {
 } from '@/components/ui'
 import type { SelectOption, TabItem } from '@/components/ui'
 import { PageHeader } from '@/components/common'
-import { deleteTaxonomyTerm, saveDepartment, saveTaxonomyTerm } from '@/mocks/adminApi'
-import { db, reference, usersById } from '@/mocks/db'
+import { EMPTY_REFERENCE, useDeleteTaxonomyTerm, useSaveDepartment, useSaveTaxonomyTerm } from '@/api/directory'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
 import { useToast } from '@/store/ToastContext'
@@ -52,7 +51,7 @@ const KIND_OPTIONS: SelectOption[] = TAXONOMY_SECTIONS.map((section) => ({
   label: section.title,
 }))
 
-function collectionFor(kind: TaxonomyKind): TaxonomyTerm[] {
+function collectionFor(reference: typeof EMPTY_REFERENCE, kind: TaxonomyKind): TaxonomyTerm[] {
   if (kind === 'tag') return reference.tags
   if (kind === 'outcome_code') return reference.outcomeCodes
   if (kind === 'closure_reason') return reference.closureReasons
@@ -61,9 +60,13 @@ function collectionFor(kind: TaxonomyKind): TaxonomyTerm[] {
 
 /** FR-060: reference data behind departments, teams, courts and taxonomies. */
 export function OrganisationPage() {
-  const { user, can, isReadOnly } = useAuth()
-  const { version, refresh } = useData()
+  const { can, isReadOnly } = useAuth()
+  const { cases, courtDates, users, usersById, reference, refresh } = useData()
+  const liveReference = reference ?? EMPTY_REFERENCE
   const toast = useToast()
+  const saveDepartment = useSaveDepartment()
+  const saveTaxonomyTerm = useSaveTaxonomyTerm()
+  const deleteTaxonomyTerm = useDeleteTaxonomyTerm()
 
   const [tab, setTab] = useState<OrgTab>('departments')
   const [department, setDepartment] = useState<Partial<Department> | null>(null)
@@ -75,27 +78,25 @@ export function OrganisationPage() {
 
   const caseCounts = useMemo(() => {
     const map = new Map<string, number>()
-    db.cases.forEach((row) => map.set(row.department, (map.get(row.department) ?? 0) + 1))
+    cases.forEach((row) => map.set(row.department, (map.get(row.department) ?? 0) + 1))
     return map
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version])
+  }, [cases])
 
   const hearingCounts = useMemo(() => {
     const map = new Map<string, number>()
-    db.courtDates.forEach((row) => map.set(row.courtId, (map.get(row.courtId) ?? 0) + 1))
+    courtDates.forEach((row) => map.set(row.courtId, (map.get(row.courtId) ?? 0) + 1))
     return map
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version])
+  }, [courtDates])
 
   const headOptions: SelectOption[] = [
     { value: '', label: 'Not assigned' },
-    ...reference.users
+    ...users
       .filter((row) => row.roleId !== 'requestor' && row.roleId !== 'external')
       .map((row) => ({ value: row.id, label: `${row.name} — ${row.position ?? row.department ?? 'HYPREP'}` })),
   ]
 
   const persistDepartment = async () => {
-    if (!user || !department) return
+    if (!department) return
     if (!department.name?.trim() || !department.code?.trim()) {
       toast.error('Name and code required', 'A department needs a display name and a short code.')
       return
@@ -104,12 +105,11 @@ export function OrganisationPage() {
     try {
       await saveDepartment(
         {
-          id: department.id || `dep-${department.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 18)}`,
+          id: department.id || undefined,
           name: department.name.trim(),
           code: department.code.trim().toUpperCase(),
           headUserId: department.headUserId || null,
         },
-        user.id,
       )
       refresh()
       toast.success(department.id ? 'Department updated' : 'Department added', department.name.trim())
@@ -120,7 +120,7 @@ export function OrganisationPage() {
   }
 
   const persistTerm = async () => {
-    if (!user || !term) return
+    if (!term) return
     if (!term.label?.trim()) {
       toast.error('Label required', 'Enter the text that will appear on the case record.')
       return
@@ -129,13 +129,12 @@ export function OrganisationPage() {
     try {
       await saveTaxonomyTerm(
         {
-          id: term.id || `${term.kind.slice(0, 2)}-${term.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 20)}`,
+          id: term.id || undefined,
           label: term.label.trim(),
           kind: term.kind,
           description: term.description?.trim() || undefined,
           color: term.color,
         },
-        user.id,
       )
       refresh()
       toast.success(term.id ? 'Term updated' : 'Term added', term.label.trim())
@@ -146,10 +145,10 @@ export function OrganisationPage() {
   }
 
   const removeTerm = async () => {
-    if (!user || !pending) return
+    if (!pending) return
     setBusy(true)
     try {
-      await deleteTaxonomyTerm(pending.id, pending.kind, user.id)
+      await deleteTaxonomyTerm(pending.id)
       refresh()
       toast.success('Term removed', `“${pending.label}” is no longer offered at triage.`)
     } finally {
@@ -199,7 +198,7 @@ export function OrganisationPage() {
                   </Tr>
                 </Thead>
                 <Tbody>
-                  {reference.departments.map((row) => {
+                  {liveReference.departments.map((row) => {
                     const head = row.headUserId ? usersById.get(row.headUserId) : undefined
                     return (
                       <Tr key={row.id}>
@@ -228,7 +227,7 @@ export function OrganisationPage() {
 
       {tab === 'teams' ? (
         <div className="grid gap-4 md:grid-cols-2">
-          {reference.legalTeams.map((team) => {
+          {liveReference.legalTeams.map((team) => {
             const lead = usersById.get(team.leadUserId)
             return (
               <Card key={team.id}>
@@ -282,7 +281,7 @@ export function OrganisationPage() {
                   </Tr>
                 </Thead>
                 <Tbody>
-                  {reference.courts.map((court) => (
+                  {liveReference.courts.map((court) => (
                     <Tr key={court.id}>
                       <Td className="font-medium text-ink-900">{court.name}</Td>
                       <Td>{court.division}</Td>
@@ -316,7 +315,7 @@ export function OrganisationPage() {
               />
               <CardBody className="p-0">
                 <ul className="divide-y divide-ink-200/70">
-                  {collectionFor(section.kind).map((row) => (
+                  {collectionFor(liveReference, section.kind).map((row) => (
                     <li key={row.id} className="flex items-start justify-between gap-3 px-5 py-3">
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-ink-800">{row.label}</p>

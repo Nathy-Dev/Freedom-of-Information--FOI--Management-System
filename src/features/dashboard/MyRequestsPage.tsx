@@ -24,8 +24,6 @@ import {
 } from '@/components/ui'
 import type { TabItem } from '@/components/ui'
 import { PageHeader } from '@/components/common'
-import { selectCases } from '@/mocks/api'
-import { db } from '@/mocks/db'
 import { computeSla } from '@/lib/sla'
 import { CONCLUDED_STATUSES, OPEN_STATUSES, STATUTORY_RESPONSE_DAYS } from '@/lib/constants'
 import { formatDate, formatRelative } from '@/lib/format'
@@ -37,21 +35,27 @@ type Tab = 'all' | 'open' | 'concluded'
 /** The requestor and external-stakeholder portal: my requests and their state. */
 export function MyRequestsPage() {
   const { user } = useAuth()
-  const { version } = useData()
+  const { cases, documents } = useData()
   const [tab, setTab] = useState<Tab>('all')
   const [term, setTerm] = useState('')
 
   const view = useMemo(() => {
     if (!user) return null
-    const mine = selectCases(user).sort((a, b) => b.dateSubmitted.localeCompare(a.dateSubmitted))
+    const mine = cases
+      .filter(
+        (row) =>
+          row.requestorUserId === user.id ||
+          row.requestorId === user.id ||
+          row.requestor?.email === user.email,
+      )
+      .sort((a, b) => b.dateSubmitted.localeCompare(a.dateSubmitted))
     const open = mine.filter((row) => OPEN_STATUSES.includes(row.status))
     const concluded = mine.filter((row) => CONCLUDED_STATUSES.includes(row.status))
-    const responses = db.documents.filter(
+    const responses = documents.filter(
       (doc) => doc.isPublic && mine.some((row) => row.id === doc.caseId),
     )
     return { mine, open, concluded, responses }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, version])
+  }, [cases, documents, user])
 
   if (!view || !user) return null
 

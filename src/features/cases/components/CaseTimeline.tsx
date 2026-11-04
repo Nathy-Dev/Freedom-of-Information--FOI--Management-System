@@ -5,7 +5,7 @@ import { NavIcon } from '@/components/layout'
 import { TIMELINE_META } from '@/lib/constants'
 import { formatDateTime, formatRelative } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { db, userName } from '@/mocks/db'
+import { useData } from '@/store/DataContext'
 
 /**
  * FR-021: the case timeline. Rendered from derived events so it can never
@@ -23,6 +23,8 @@ export function CaseTimeline({
   limit?: number
   className?: string
 }) {
+  const { cases, usersById } = useData()
+  const userName = (id: string | null | undefined) => usersById.get(id ?? '')?.name ?? 'Unknown user'
   const rows = limit ? events.slice(0, limit) : events
 
   if (rows.length === 0) {
@@ -39,7 +41,7 @@ export function CaseTimeline({
     <ol className={cn('relative space-y-0', className)}>
       {rows.map((event, index) => {
         const meta = TIMELINE_META[event.kind]
-        const parent = showCase ? db.cases.find((row) => row.id === event.caseId) : undefined
+        const parent = showCase ? cases.find((row) => row.id === event.caseId) : undefined
         const isLast = index === rows.length - 1
 
         return (

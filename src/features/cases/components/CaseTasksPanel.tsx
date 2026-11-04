@@ -13,12 +13,13 @@ import {
   TaskStatusBadge,
   UserChip,
 } from '@/components/ui'
-import { addTask, setTaskStatus } from '@/mocks/api'
-import { reference, usersById } from '@/mocks/db'
+import { useAddTask, useSetTaskStatus } from '@/api/notes'
+import { useData } from '@/store/DataContext'
 import { formatDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/store/AuthContext'
 import { useToast } from '@/store/ToastContext'
+import { EMPTY_REFERENCE } from '@/api/directory'
 
 export interface CaseTasksPanelProps {
   caseId: string
@@ -36,11 +37,15 @@ function isoDaysAhead(days: number) {
 /** Working checklist for a case: who does what by when. */
 export function CaseTasksPanel({ caseId, tasks, onChanged, readOnly = false }: CaseTasksPanelProps) {
   const { user } = useAuth()
+  const { reference, usersById } = useData()
+  const liveReference = reference ?? EMPTY_REFERENCE
+  const addTask = useAddTask()
+  const setTaskStatus = useSetTaskStatus()
   const toast = useToast()
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [title, setTitle] = useState('')
-  const [assignee, setAssignee] = useState(reference.assignableStaff[0]?.id ?? '')
+  const [assignee, setAssignee] = useState('')
   const [due, setDue] = useState(isoDaysAhead(3))
 
   const outstanding = tasks.filter((task) => task.status !== 'done').length
@@ -49,7 +54,7 @@ export function CaseTasksPanel({ caseId, tasks, onChanged, readOnly = false }: C
     if (!user || !title.trim()) return
     setBusy(true)
     try {
-      await addTask(caseId, { title: title.trim(), assigneeId: assignee, dueDate: due }, user.id)
+      await addTask({ caseId, title: title.trim(), assigneeId: assignee, dueDate: due })
       onChanged()
       toast.success('Task created', `${usersById.get(assignee)?.name ?? 'The officer'} has been notified.`)
       setTitle('')
@@ -162,7 +167,7 @@ export function CaseTasksPanel({ caseId, tasks, onChanged, readOnly = false }: C
           />
           <Select
             label="Assign to"
-            options={reference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name }))}
+            options={liveReference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name }))}
             value={assignee}
             onChange={(event) => setAssignee(event.target.value)}
           />

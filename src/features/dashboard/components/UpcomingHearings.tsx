@@ -4,10 +4,11 @@ import type { CourtDate } from '@/types'
 import { Badge, Card, CardBody, CardHeader, EmptyState } from '@/components/ui'
 import { HEARING_TYPE_LABELS } from '@/lib/constants'
 import { formatClock, formatSmartDate } from '@/lib/format'
-import { db } from '@/mocks/db'
+import { useData } from '@/store/DataContext'
 
 /** Next sittings, newest first — FR-041 hearing awareness on the dashboard. */
 export function UpcomingHearings({ hearings, limit = 5 }: { hearings: CourtDate[]; limit?: number }) {
+  const { cases } = useData()
   const rows = hearings.slice(0, limit)
 
   return (
@@ -38,7 +39,7 @@ export function UpcomingHearings({ hearings, limit = 5 }: { hearings: CourtDate[
         ) : (
           <ul className="divide-y divide-ink-100">
             {rows.map((sitting) => {
-              const parent = db.cases.find((row) => row.id === sitting.caseId)
+              const parent = cases.find((row) => row.id === sitting.caseId)
               return (
                 <li key={sitting.id}>
                   <Link

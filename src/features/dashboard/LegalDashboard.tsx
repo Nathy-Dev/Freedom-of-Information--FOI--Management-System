@@ -14,9 +14,7 @@ import {
 import { ButtonLink, Card, CardBody, CardHeader, StatCard } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { SlaGauge, StatusDonut, TrendChart } from '@/components/charts'
-import { dashboardMetrics } from '@/mocks/metrics'
-import { selectCases } from '@/mocks/api'
-import { db, reference } from '@/mocks/db'
+import { useDashboardMetrics } from '@/api/dashboard'
 import { computeSla } from '@/lib/sla'
 import { formatDays, formatNumber, formatPercent } from '@/lib/format'
 import { OPEN_STATUSES, STATUTORY_RESPONSE_DAYS } from '@/lib/constants'
@@ -30,13 +28,18 @@ import { CaseTimeline } from '../cases/components/CaseTimeline'
 /** FR-030: the Legal Unit's operating picture — workload, deadlines, hearings. */
 export function LegalDashboard() {
   const { user, role } = useAuth()
-  const { version, teamMemberIds } = useData()
+  const { cases } = useData()
+  const liveMetrics = useDashboardMetrics()
 
   const view = useMemo(() => {
     if (!user) return null
 
-    const cases = selectCases(user, undefined, teamMemberIds)
-    const metrics = dashboardMetrics(cases, reference.assignableStaff)
+    const metrics = liveMetrics ?? {
+      totalCases: 0, openCases: 0, overdueCases: 0, dueSoonCases: 0, closedThisMonth: 0,
+      avgResponseDays: 0, slaComplianceRate: 0, appealsCount: 0, escalationsCount: 0,
+      statusCounts: [], trend: [], aging: [], byDepartment: [], topRequestors: [], workload: [],
+      recentCases: [], upcomingHearings: [], tasks: [], activity: [],
+    }
     const ids = new Set(cases.map((row) => row.id))
 
     const open = cases.filter((row) => OPEN_STATUSES.includes(row.status))
@@ -58,20 +61,18 @@ export function LegalDashboard() {
 
     const unassigned = open.filter((row) => !row.assignedTo)
 
-    const today = new Date().toISOString().slice(0, 10)
-    const hearings = db.courtDates
-      .filter((sitting) => sitting.date >= today && sitting.status === 'scheduled' && ids.has(sitting.caseId))
-      .sort((a, b) => a.date.localeCompare(b.date))
+    const hearings = (liveMetrics?.upcomingHearings ?? []).filter(
+      (sitting) => sitting.status === 'scheduled' && ids.has(sitting.caseId),
+    )
 
-    const tasks = db.tasks
+    const tasks = (liveMetrics?.tasks ?? [])
       .filter((task) => task.assigneeId === user.id && task.status !== 'done')
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
 
-    const activity = db.timeline.filter((event) => ids.has(event.caseId)).slice(0, 8)
+    const activity = (liveMetrics?.activity ?? []).filter((event) => ids.has(event.caseId)).slice(0, 8)
 
     return { cases, metrics, overdue, dueSoon, mine, unassigned, hearings, tasks, activity }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, teamMemberIds, version])
+  }, [cases, liveMetrics, user])
 
   if (!view || !user) return null
   const { metrics } = view

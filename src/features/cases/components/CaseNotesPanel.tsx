@@ -13,8 +13,8 @@ import {
   Tooltip,
   UserAvatar,
 } from '@/components/ui'
-import { addNote, togglePinNote } from '@/mocks/api'
-import { usersById } from '@/mocks/db'
+import { useAddNote, useTogglePinNote } from '@/api/notes'
+import { useData } from '@/store/DataContext'
 import { formatDateTime, formatRelative } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/store/AuthContext'
@@ -40,6 +40,9 @@ export function CaseNotesPanel({
   readOnly = false,
 }: CaseNotesPanelProps) {
   const { user } = useAuth()
+  const { usersById } = useData()
+  const addNote = useAddNote()
+  const togglePinNote = useTogglePinNote()
   const toast = useToast()
   const [tab, setTab] = useState<NoteTab>(publicOnly ? 'public' : 'internal')
   const [draft, setDraft] = useState('')
@@ -53,7 +56,7 @@ export function CaseNotesPanel({
     if (!user || !draft.trim()) return
     setBusy(true)
     try {
-      await addNote(caseId, { content: draft.trim(), type: tab }, user.id)
+      await addNote(caseId, { content: draft.trim(), type: tab })
       setDraft('')
       onChanged()
       toast.success(

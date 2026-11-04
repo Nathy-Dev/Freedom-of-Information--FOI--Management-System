@@ -35,9 +35,8 @@ import {
 import type { SelectOption } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { BarChartCard } from '@/components/charts'
-import { selectCases } from '@/mocks/api'
-import { deleteReport, saveReport } from '@/mocks/adminApi'
-import { db, reference, userName } from '@/mocks/db'
+import { useReports, useSaveReport, useDeleteReport } from '@/api/reports'
+import { EMPTY_REFERENCE } from '@/api/directory'
 import { PRIORITY_META, STATUS_META, STATUS_ORDER } from '@/lib/constants'
 import { computeSla, slaComplianceRate } from '@/lib/sla'
 import { formatDate, formatDays, formatMonthYear, formatNumber, formatPercent } from '@/lib/format'
@@ -116,7 +115,7 @@ interface ResultRow {
   escalations: number
 }
 
-function groupLabel(foiCase: FoiCase, groupBy: ReportGroupBy) {
+function groupLabel(foiCase: FoiCase, groupBy: ReportGroupBy, userName: (id: string) => string) {
   switch (groupBy) {
     case 'status':
       return STATUS_META[foiCase.status].label
@@ -135,11 +134,11 @@ function groupLabel(foiCase: FoiCase, groupBy: ReportGroupBy) {
   }
 }
 
-/** The aggregation the mock backend would otherwise do, run over the visible rows. */
-function aggregate(rows: FoiCase[], groupBy: ReportGroupBy): ResultRow[] {
+/** Aggregates the live, permission-scoped rows returned by Convex. */
+function aggregate(rows: FoiCase[], groupBy: ReportGroupBy, userName: (id: string) => string): ResultRow[] {
   const groups = new Map<string, FoiCase[]>()
   rows.forEach((row) => {
-    const label = groupLabel(row, groupBy)
+    const label = groupLabel(row, groupBy, userName)
     const list = groups.get(label) ?? []
     list.push(row)
     groups.set(label, list)
@@ -181,7 +180,8 @@ function metricValue(row: ResultRow, metric: ReportMetric) {
 /** FR-052 / FR-054: build, preview, save and schedule a custom report. */
 export function ReportBuilderPage() {
   const { user, can, isReadOnly } = useAuth()
-  const { version, refresh } = useData()
+  const { cases: liveCases, usersById, reference, refresh } = useData()
+  const liveReference = reference ?? EMPTY_REFERENCE
   const toast = useToast()
 
   const [filters, setFilters] = useState<ReportFilters>(DEFAULT_FILTERS)
@@ -197,9 +197,21 @@ export function ReportBuilderPage() {
   const set = <K extends keyof ReportFilters>(key: K, value: ReportFilters[K]) =>
     setFilters((prev) => ({ ...prev, [key]: value }))
 
-  const saved = useMemo(() => db.reports.slice(), [version])
+  const convexReports = useReports()
+  const convexSaveReport = useSaveReport()
+  const convexDeleteReport = useDeleteReport()
 
-  const scoped = useMemo(() => (user ? selectCases(user) : []), [user, version])
+  const saved = useMemo(
+    () => convexReports ?? [],
+    [convexReports],
+  )
+
+  const scoped = useMemo(
+    () => user ? liveCases : [],
+    [liveCases, user],
+  )
+
+  const userName = (id: string) => usersById.get(id)?.name ?? id
 
   const matched = useMemo(() => {
     const days = PERIOD_DAYS[filters.period]
@@ -220,7 +232,7 @@ export function ReportBuilderPage() {
     return rows
   }, [scoped, filters])
 
-  const results = useMemo(() => aggregate(matched, filters.groupBy), [matched, filters.groupBy])
+  const results = useMemo(() => aggregate(matched, filters.groupBy, userName), [matched, filters.groupBy, usersById])
   const metrics = filters.metrics.length ? filters.metrics : (['count'] as ReportMetric[])
   const groupTitle = GROUP_OPTIONS.find((option) => option.value === filters.groupBy)?.label ?? 'Group'
 
@@ -276,25 +288,15 @@ export function ReportBuilderPage() {
     }
     setBusy(true)
     try {
-      await saveReport(
-        {
-          id: editingId ?? '',
-          name: name.trim(),
-          description: description.trim() || `Custom report grouped by ${groupTitle.toLowerCase()}.`,
-          creatorId: user.id,
-          filters,
-          cadence,
-          recipients: recipients
-            .split(',')
-            .map((entry) => entry.trim())
-            .filter(Boolean),
-          format,
-          lastRun: null,
-          nextRun: nextRunFor(cadence),
-          createdAt: new Date().toISOString(),
-        },
-        user.id,
-      )
+      await convexSaveReport({
+        id: editingId ?? undefined,
+        name: name.trim(),
+        description: description.trim() || `Custom report grouped by ${groupTitle.toLowerCase()}.`,
+        filters,
+        cadence,
+        recipients: recipients.split(',').map((entry) => entry.trim()).filter(Boolean),
+        format,
+      })
       refresh()
       toast.success(editingId ? 'Report updated' : 'Report saved', 'It is now available to your team.')
       resetForm()
@@ -307,7 +309,7 @@ export function ReportBuilderPage() {
     if (!pendingDelete || !user) return
     setBusy(true)
     try {
-      await deleteReport(pendingDelete.id, user.id)
+      await convexDeleteReport(pendingDelete.id)
       refresh()
       toast.success('Report deleted', `“${pendingDelete.name}” was removed.`)
       if (editingId === pendingDelete.id) resetForm()
@@ -406,7 +408,7 @@ export function ReportBuilderPage() {
               <div>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">Department</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {reference.departments.slice(0, 10).map((department) => (
+                  {liveReference.departments.slice(0, 10).map((department) => (
                     <ChoiceChip
                       key={department.id}
                       selected={filters.departments.includes(department.name)}
@@ -420,7 +422,7 @@ export function ReportBuilderPage() {
               <div>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">Tags</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {reference.tags.map((tag) => (
+                  {liveReference.tags.map((tag) => (
                     <ChoiceChip
                       key={tag.id}
                       selected={filters.tags.includes(tag.label)}
@@ -455,7 +457,7 @@ export function ReportBuilderPage() {
                   options={FORMAT_OPTIONS}
                   value={format}
                   onChange={(event) => setFormat(event.target.value as ReportFormat)}
-                  hint="PDF and Excel are stubbed in this prototype."
+                  hint="CSV is available now; PDF and Excel delivery require a configured export worker."
                 />
               </div>
               <div>

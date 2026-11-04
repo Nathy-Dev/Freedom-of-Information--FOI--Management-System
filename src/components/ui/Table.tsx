@@ -77,7 +77,7 @@ interface SortableThProps<K extends string> extends Omit<ThHTMLAttributes<HTMLTa
   align?: 'left' | 'right' | 'center'
 }
 
-/** Column header that drives server-style sorting in the mock API. */
+/** Column header that drives the list sorting contract used by live queries. */
 export function SortableTh<K extends string>({
   columnKey,
   activeKey,

@@ -18,15 +18,16 @@ import {
   Tooltip,
 } from '@/components/ui'
 import { PageHeader } from '@/components/common'
-import { reference } from '@/mocks/db'
 import { ALL_PERMISSIONS, PERMISSION_GROUPS, ROLES } from '@/lib/rbac'
 import { downloadTextFile, toCsv } from '@/lib/utils'
 import { useAuth } from '@/store/AuthContext'
 import { useToast } from '@/store/ToastContext'
+import { useData } from '@/store/DataContext'
 
 /** FR-002 / FR-003: the permission matrix that governs navigation and route guards. */
 export function RolesPage() {
   const { can } = useAuth()
+  const { users } = useData()
   const toast = useToast()
 
   const [focus, setFocus] = useState<RoleId | null>(null)
@@ -34,9 +35,9 @@ export function RolesPage() {
 
   const counts = useMemo(() => {
     const map = new Map<RoleId, number>()
-    reference.users.forEach((user) => map.set(user.roleId, (map.get(user.roleId) ?? 0) + 1))
+    users.forEach((user) => map.set(user.roleId, (map.get(user.roleId) ?? 0) + 1))
     return map
-  }, [])
+  }, [users])
 
   const groups = group ? PERMISSION_GROUPS.filter((entry) => entry.group === group) : PERMISSION_GROUPS
   const roles = focus ? ROLES.filter((role) => role.id === focus) : ROLES

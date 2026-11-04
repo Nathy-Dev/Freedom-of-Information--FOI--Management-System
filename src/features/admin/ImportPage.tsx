@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Columns3,
   Download,
-  FileSpreadsheet,
   RotateCcw,
   Upload,
   UploadCloud,
@@ -33,13 +32,12 @@ import type { SelectOption } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import {
   IMPORT_FIELDS,
-  SAMPLE_CSV,
-  commitImport,
   parseCsv,
   suggestMapping,
   validateRows,
-} from '@/mocks/importApi'
-import type { ImportFieldKey, ImportSummary, ParsedCsv, ValidationResult } from '@/mocks/importApi'
+  useCommitImport,
+} from '@/api/import'
+import type { ImportFieldKey, ImportSummary, ParsedCsv, ValidationResult } from '@/api/import'
 import { formatBytes, formatNumber } from '@/lib/format'
 import { downloadTextFile } from '@/lib/utils'
 import { useAuth } from '@/store/AuthContext'
@@ -66,9 +64,10 @@ const FIELD_OPTIONS: SelectOption[] = [
 const REQUIRED_KEYS = IMPORT_FIELDS.filter((field) => field.required).map((field) => field.key)
 
 export function ImportPage() {
-  const { user, can, isReadOnly } = useAuth()
-  const { refresh } = useData()
+  const { can, isReadOnly } = useAuth()
+  const { reference, refresh } = useData()
   const toast = useToast()
+  const commitImport = useCommitImport()
 
   const [step, setStep] = useState<Step>(1)
   const [fileName, setFileName] = useState('')
@@ -124,13 +123,9 @@ export function ImportPage() {
     event.target.value = ''
   }
 
-  function useSample() {
-    loadText(SAMPLE_CSV, 'hyprep-foi-sample-import.csv', SAMPLE_CSV.length)
-  }
-
   function validate() {
     if (!parsed) return
-    const next = validateRows(parsed, mapping)
+    const next = validateRows(parsed, mapping, (reference?.departments ?? []).map((department) => department.name))
     setResult(next)
     setStep(3)
     if (next.errorCount > 0) {
@@ -144,14 +139,13 @@ export function ImportPage() {
   }
 
   async function runImport() {
-    if (!user || !result || result.validCount === 0) return
+    if (!result || result.validCount === 0) return
     setIsImporting(true)
     setStep(4)
     setProgress(0)
     try {
-      const outcome = await commitImport(result.valid, user.id, (done, total) => {
-        setProgress(Math.round((done / total) * 100))
-      })
+      const outcome = await commitImport(fileName, result.valid)
+      setProgress(100)
       setSummary(outcome)
       refresh()
       toast.success(
@@ -186,7 +180,7 @@ export function ImportPage() {
             <Button
               variant="ghost"
               leadingIcon={<Download className="h-4 w-4" />}
-              onClick={() => downloadTextFile('hyprep-foi-import-template.csv', SAMPLE_CSV, 'text/csv')}
+              onClick={() => downloadTextFile('hyprep-foi-import-template.csv', `${IMPORT_FIELDS.map((field) => field.key).join(',')}\n`, 'text/csv')}
             >
               Download template
             </Button>
@@ -257,14 +251,6 @@ export function ImportPage() {
                 <span className="text-xs text-ink-500">Maximum 5,000 rows per file · UTF-8 encoding</span>
                 <input type="file" accept=".csv,text/csv" className="sr-only" onChange={onFileChange} />
               </label>
-              <div className="flex items-center gap-3">
-                <span className="h-px flex-1 bg-ink-200" />
-                <span className="text-2xs uppercase tracking-wide text-ink-400">or</span>
-                <span className="h-px flex-1 bg-ink-200" />
-              </div>
-              <Button variant="secondary" leadingIcon={<FileSpreadsheet className="h-4 w-4" />} onClick={useSample} fullWidth>
-                Load the three-row sample file
-              </Button>
             </CardBody>
           </Card>
 

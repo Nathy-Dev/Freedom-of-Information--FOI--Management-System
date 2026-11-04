@@ -119,7 +119,7 @@ export function AuthLayout({
           />
         </div>
 
-        <div className="scrollbar-none relative flex h-full flex-col overflow-y-auto px-10 py-10 xl:px-14 xl:py-12">
+        <div className="scrollbar-none relative flex h-full flex-col overflow-y-auto lg:overflow-hidden px-10 py-8 xl:px-14 xl:py-10">
           <header className="shrink-0">
             <p className="font-mono text-2xs uppercase tracking-[0.22em] text-brand-200">
               Federal Republic of Nigeria
@@ -127,25 +127,25 @@ export function AuthLayout({
             <div className="mt-4">
               <BrandLockup size="lg" onDark subtitle="Freedom of Information Management System" />
             </div>
-            <FlagRule className="mt-5 w-28 ring-1 ring-white/25" />
+            <FlagRule className="mt-4 w-28 ring-1 ring-white/25" />
           </header>
 
-          <div className="my-auto max-w-[31rem] py-12">
-            <p className="text-balance font-serif text-[2.125rem] font-semibold leading-[1.14] text-white">
+          <div className="my-auto max-w-[31rem] py-6">
+            <p className="text-balance font-serif text-3xl xl:text-[2.125rem] font-semibold leading-[1.14] text-white">
               {headline}
             </p>
-            <p className="mt-5 text-sm leading-relaxed text-brand-50">{lede}</p>
+            <p className="mt-4 text-sm leading-relaxed text-brand-50">{lede}</p>
 
-            <p className="mt-9 font-mono text-2xs uppercase tracking-[0.18em] text-brand-200">
+            <p className="mt-6 font-mono text-2xs uppercase tracking-[0.18em] text-brand-200">
               Under the {source}
             </p>
             <dl className="mt-3 border-t border-white/15">
               {clauses.map((clause) => (
-                <div key={clause.section} className="border-b border-white/15 py-4">
+                <div key={clause.section} className="border-b border-white/15 py-3">
                   <dt className="text-sm font-semibold text-white">{clause.title}</dt>
                   <dd>
                     <p className="mt-1 text-xs leading-relaxed text-brand-100">{clause.body}</p>
-                    <p className="mt-2 font-mono text-2xs uppercase tracking-[0.16em] text-brand-200">
+                    <p className="mt-1.5 font-mono text-2xs uppercase tracking-[0.16em] text-brand-200">
                       {clause.section}
                     </p>
                   </dd>
@@ -154,7 +154,7 @@ export function AuthLayout({
             </dl>
           </div>
 
-          <footer className="shrink-0 border-t border-white/15 pt-5">
+          <footer className="shrink-0 border-t border-white/15 pt-4">
             <p className="flex items-start gap-2 text-xs leading-relaxed text-brand-100">
               <Lock aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               Access is logged against your account. Unauthorised access is an offence under the

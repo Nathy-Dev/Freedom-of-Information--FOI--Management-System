@@ -11,9 +11,7 @@ import {
 import { ButtonLink, Card, CardBody, CardHeader, StatCard, Table, TableWrap, Tbody, Td, Th, Thead, Tr, UserChip } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { BarChartCard, StackedBarCard, TrendChart } from '@/components/charts'
-import { dashboardMetrics } from '@/mocks/metrics'
-import { selectCases } from '@/mocks/api'
-import { db, reference, usersById } from '@/mocks/db'
+import { useDashboardMetrics } from '@/api/dashboard'
 import { computeSla } from '@/lib/sla'
 import { formatDays, formatNumber, formatPercent, formatRelative } from '@/lib/format'
 import { OPEN_STATUSES, ROLE_LABELS } from '@/lib/constants'
@@ -30,12 +28,17 @@ const WORKLOAD_SERIES = [
 /** FR-002 / FR-013: the Admin's view — intake, assignment and account upkeep. */
 export function AdminDashboard() {
   const { user } = useAuth()
-  const { version, teamMemberIds } = useData()
+  const { cases, users, usersById } = useData()
+  const liveMetrics = useDashboardMetrics()
 
   const view = useMemo(() => {
     if (!user) return null
-    const cases = selectCases(user, undefined, teamMemberIds)
-    const metrics = dashboardMetrics(cases, reference.assignableStaff)
+    const metrics = liveMetrics ?? {
+      totalCases: 0, openCases: 0, overdueCases: 0, dueSoonCases: 0, closedThisMonth: 0,
+      avgResponseDays: 0, slaComplianceRate: 0, appealsCount: 0, escalationsCount: 0,
+      statusCounts: [], trend: [], aging: [], byDepartment: [], topRequestors: [], workload: [],
+      recentCases: [], upcomingHearings: [], tasks: [], activity: [],
+    }
     const open = cases.filter((row) => OPEN_STATUSES.includes(row.status))
 
     const workload = metrics.workload.map((row) => ({
@@ -58,15 +61,14 @@ export function AdminDashboard() {
       newest: cases.filter((row) => row.status === 'filed'),
       workload,
       departments,
-      pendingInvites: reference.users.filter((entry) => entry.status === 'invited'),
-      recentLogins: [...reference.users]
+      pendingInvites: users.filter((entry) => entry.status === 'invited'),
+      recentLogins: [...users]
         .filter((entry) => entry.lastLoginAt)
         .sort((a, b) => (b.lastLoginAt ?? '').localeCompare(a.lastLoginAt ?? ''))
         .slice(0, 6),
-      imports: db.cases.filter((row) => row.source === 'csv_import').length,
+      imports: cases.filter((row) => row.source === 'csv_import').length,
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, teamMemberIds, version])
+  }, [cases, liveMetrics, user, users, usersById])
 
   if (!view) return null
   const { metrics } = view

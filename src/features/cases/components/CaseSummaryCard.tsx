@@ -13,10 +13,11 @@ import { DescriptionList } from '@/components/common'
 import { SOURCE_LABELS, RESPONSE_FORMAT_LABELS, STATUTORY_RESPONSE_DAYS } from '@/lib/constants'
 import { computeSla } from '@/lib/sla'
 import { formatDate, formatDateTime, formatRelative } from '@/lib/format'
-import { usersById } from '@/mocks/db'
+import { useData } from '@/store/DataContext'
 
 /** FR-021: the facts panel at the head of a case file. */
 export function CaseSummaryCard({ foiCase }: { foiCase: FoiCase }) {
+  const { usersById } = useData()
   const sla = computeSla(foiCase)
   const assignee = foiCase.assignedTo ? usersById.get(foiCase.assignedTo) : undefined
 

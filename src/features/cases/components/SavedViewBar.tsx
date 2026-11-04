@@ -8,7 +8,7 @@ import {
   STATUS_META,
 } from '@/lib/constants'
 import { formatDate } from '@/lib/format'
-import { userName } from '@/mocks/db'
+import { useData } from '@/store/DataContext'
 import { cn } from '@/lib/utils'
 
 export interface SavedViewBarProps {
@@ -31,7 +31,7 @@ interface Descriptor {
 }
 
 /** Turn the filter object into removable chips so users can see exactly what is applied. */
-function describe(filters: CaseFilters): Descriptor[] {
+function describe(filters: CaseFilters, userName: (id: string) => string): Descriptor[] {
   const out: Descriptor[] = []
 
   if (filters.q) out.push({ key: 'q', label: 'Search', value: filters.q, clear: { q: undefined } })
@@ -116,7 +116,9 @@ export function SavedViewBar({
   canSave = true,
   currentUserId,
 }: SavedViewBarProps) {
-  const chips = describe(filters)
+  const { usersById } = useData()
+  const userName = (id: string) => usersById.get(id)?.name ?? 'Unknown user'
+  const chips = describe(filters, userName)
 
   return (
     <div className="space-y-3">

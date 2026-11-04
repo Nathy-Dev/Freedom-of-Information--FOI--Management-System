@@ -6,20 +6,6 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-/** Stable pseudo-random generator so mock data is identical on every reload. */
-export function seededRandom(seed: number) {
-  let state = seed % 2147483647
-  if (state <= 0) state += 2147483646
-  return () => {
-    state = (state * 16807) % 2147483647
-    return (state - 1) / 2147483646
-  }
-}
-
-export function pick<T>(rand: () => number, list: readonly T[]): T {
-  return list[Math.floor(rand() * list.length)]
-}
-
 export function range(n: number) {
   return Array.from({ length: n }, (_, i) => i)
 }
@@ -52,11 +38,6 @@ export function toggleIn<T>(list: T[], value: T): T[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
 }
 
-/** Simulated network latency so loading states are exercised in the prototype. */
-export function delay(ms = 220) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms))
-}
-
 export function initialsOf(name: string) {
   return name
     .split(/\s+/)
@@ -64,13 +45,6 @@ export function initialsOf(name: string) {
     .slice(0, 2)
     .map((part) => part[0]!.toUpperCase())
     .join('')
-}
-
-/** Deterministic id generator (avoids crypto/UUID churn between renders). */
-let idCounter = 0
-export function nextId(prefix: string) {
-  idCounter += 1
-  return `${prefix}-${String(idCounter).padStart(5, '0')}`
 }
 
 export function downloadTextFile(fileName: string, contents: string, mime = 'text/plain') {

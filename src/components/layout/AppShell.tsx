@@ -3,8 +3,6 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { Portal, Toaster, useEscapeKey, useScrollLock } from '@/components/ui'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
-import { db } from '@/mocks/db'
-import { selectCases } from '@/mocks/api'
 import { computeSla } from '@/lib/sla'
 import { Sidebar } from './Sidebar'
 import type { SidebarCounts } from './Sidebar'
@@ -18,7 +16,7 @@ import { CommandPalette } from './CommandPalette'
  */
 export function AppShell() {
   const { user } = useAuth()
-  const { version, unread, teamMemberIds } = useData()
+  const { version, unread, teamMemberIds, cases, courtDates } = useData()
   const location = useLocation()
   const [mobileNav, setMobileNav] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -59,7 +57,11 @@ export function AppShell() {
   const counts = useMemo<SidebarCounts>(() => {
     if (!user) return { overdue: 0, review: 0, unread: 0, hearings: 0 }
 
-    const visible = selectCases(user, undefined, teamMemberIds)
+    const visible = cases.filter((row) =>
+      user.roleId === 'super_admin' || user.roleId === 'admin' || user.roleId === 'legal' || user.roleId === 'clerk' || user.roleId === 'auditor'
+        ? true
+        : row.requestorId === user.id || row.assignedTo === user.id || teamMemberIds.includes(row.assignedTo ?? ''),
+    )
     const overdue = visible.filter((row) => computeSla(row).state === 'overdue').length
     const review = visible.filter(
       (row) => row.status === 'in_review' || row.status === 'escalated' || row.status === 'appeal',
@@ -70,7 +72,7 @@ export function AppShell() {
     const horizon = new Date()
     horizon.setDate(horizon.getDate() + 14)
     const horizonIso = horizon.toISOString().slice(0, 10)
-    const hearings = db.courtDates.filter(
+    const hearings = courtDates.filter(
       (sitting) =>
         sitting.status === 'scheduled' &&
         sitting.date >= todayIso &&
@@ -79,8 +81,8 @@ export function AppShell() {
     ).length
 
     return { overdue, review, unread, hearings }
-    // `version` re-derives the badges after any mock-store mutation.
-  }, [user, teamMemberIds, unread, version])
+    // `version` re-derives the badges after a live data refresh.
+  }, [user, teamMemberIds, unread, version, cases, courtDates])
 
   return (
     /*

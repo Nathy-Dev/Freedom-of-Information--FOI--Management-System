@@ -17,8 +17,8 @@ import {
 } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
 import { PageHeader } from '@/components/common'
-import { createCase, uploadDocument } from '@/mocks/api'
-import { reference } from '@/mocks/db'
+import { useCreateCase } from '@/api/cases'
+import { useUploadDocument } from '@/api/documents'
 import {
   CONFIDENTIALITY_META,
   PRIORITY_META,
@@ -29,6 +29,7 @@ import {
 import { formatDate } from '@/lib/format'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
+import { EMPTY_REFERENCE } from '@/api/directory'
 import { useToast } from '@/store/ToastContext'
 
 const SOURCE_OPTIONS: SelectOption[] = (
@@ -50,6 +51,10 @@ export function NewCasePage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const { refresh } = useData()
+  const { reference } = useData()
+  const liveReference = reference ?? EMPTY_REFERENCE
+  const createCase = useCreateCase()
+  const uploadDocument = useUploadDocument()
   const toast = useToast()
 
   const [busy, setBusy] = useState(false)
@@ -62,7 +67,7 @@ export function NewCasePage() {
     organization: '',
     subject: '',
     description: '',
-    department: reference.departments[0]?.name ?? 'Legal Unit',
+    department: 'Legal Unit',
     source: 'email' as CaseSource,
     responseFormat: 'electronic' as ResponseFormat,
     priority: 'medium' as CasePriority,
@@ -77,17 +82,17 @@ export function NewCasePage() {
   const staffOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: 'Leave unassigned (goes to the triage queue)' },
-      ...reference.assignableStaff.map((staff) => ({
+      ...liveReference.assignableStaff.map((staff) => ({
         value: staff.id,
         label: `${staff.name} — ${staff.position ?? staff.department ?? 'Legal Unit'}`,
       })),
     ],
-    [],
+    [liveReference.assignableStaff],
   )
 
   const departmentOptions = useMemo<SelectOption[]>(
-    () => reference.departments.map((dep) => ({ value: dep.name, label: dep.name })),
-    [],
+    () => liveReference.departments.map((dep) => ({ value: dep.name, label: dep.name })),
+    [liveReference.departments],
   )
 
   const errors = useMemo(() => {
@@ -113,8 +118,7 @@ export function NewCasePage() {
     if (Object.keys(errors).length > 0 || !user) return
     setBusy(true)
     try {
-      const created = await createCase(
-        {
+      const created = await createCase({
           subject: form.subject.trim(),
           description: form.description.trim(),
           department: form.department,
@@ -132,23 +136,15 @@ export function NewCasePage() {
             isJournalist: form.tags.includes('Media Enquiry'),
           },
           assignedTo: form.assignedTo || null,
-        },
-        user.id,
-      )
+      })
 
       for (const file of files) {
-        await uploadDocument(
-          created.id,
-          {
-            fileName: file.name,
-            fileSize: file.size,
+        await uploadDocument(created.id, file, {
             kind: 'request',
             confidentiality: form.confidentiality,
             isPublic: false,
             retentionLabel: 'Standard - 7 years',
-          },
-          user.id,
-        )
+        })
       }
 
       refresh()
@@ -311,7 +307,7 @@ export function NewCasePage() {
               <div>
                 <p className="mb-1.5 text-sm font-medium text-ink-700">Tags</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {reference.tags.map((tag) => (
+                  {liveReference.tags.map((tag) => (
                     <ChoiceChip
                       key={tag.id}
                       selected={form.tags.includes(tag.label)}

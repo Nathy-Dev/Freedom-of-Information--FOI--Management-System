@@ -27,8 +27,8 @@ import {
 import type { TabItem } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { TIMEZONE_LABEL } from '@/lib/format'
-import { reference } from '@/mocks/db'
 import { useAuth } from '@/store/AuthContext'
+import { useData } from '@/store/DataContext'
 
 type HelpTab = 'guides' | 'statute' | 'faq' | 'contact'
 
@@ -199,8 +199,8 @@ const FAQS: Faq[] = [
   {
     question: 'Is this the live system?',
     answer:
-      'No. This is a frontend prototype for review. All cases, people, documents and hearings are realistic mock data generated in the browser; nothing is saved to a server and changes reset when you reload the page.',
-    tags: ['Prototype'],
+      'Yes. Cases, people, documents and hearings are read from the live Convex deployment, and permitted changes are written back immediately. Access is scoped to your signed-in role.',
+    tags: ['Live data', 'Access'],
   },
 ]
 
@@ -231,6 +231,7 @@ const CONTACTS = [
 /** FR-062: in-product guidance, statutory reference and support routes. */
 export function HelpPage() {
   const { role, isAuthenticated } = useAuth()
+  const { reference } = useData()
   const [tab, setTab] = useState<HelpTab>('guides')
   const [term, setTerm] = useState('')
 
@@ -460,7 +461,7 @@ export function HelpPage() {
             />
             <CardBody className="p-0">
               <ul className="divide-y divide-ink-100">
-                {reference.courts.map((court) => (
+                {(reference?.courts ?? []).map((court) => (
                   <li key={court.id} className="flex items-start gap-3 p-4">
                     <Gavel className="mt-0.5 h-4 w-4 shrink-0 text-ink-400" />
                     <div className="min-w-0">

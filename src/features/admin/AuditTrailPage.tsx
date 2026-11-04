@@ -28,12 +28,11 @@ import {
 } from '@/components/ui'
 import type { BadgeTone, SelectOption, TabItem } from '@/components/ui'
 import { MetaItem, PageHeader } from '@/components/common'
-import { listAccessLogs, listAuditLogs } from '@/mocks/api'
-import { reference, usersById } from '@/mocks/db'
+import { useAccessLogs, useAuditLogs } from '@/api/audit'
 import { AUDIT_ACTION_META, AUDIT_SEVERITY_META } from '@/lib/constants'
 import { formatDateTime, formatNumber, formatRelative } from '@/lib/format'
 import { cn, downloadTextFile, toCsv, toggleIn } from '@/lib/utils'
-import { useAsync, useDebounced } from '@/hooks/useAsync'
+import { useDebounced } from '@/hooks/useAsync'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
 import { useToast } from '@/store/ToastContext'
@@ -85,7 +84,7 @@ const ACCESS_OPTIONS: SelectOption[] = [
 
 export function AuditTrailPage() {
   const { can } = useAuth()
-  const { version } = useData()
+  const { users, usersById } = useData()
   const toast = useToast()
   const navigate = useNavigate()
   const { pathname } = useLocation()
@@ -106,40 +105,31 @@ export function AuditTrailPage() {
   const actorOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: 'Any actor' },
-      ...reference.users
+      ...users
         .filter((row) => row.roleId !== 'requestor' && row.roleId !== 'external')
         .map((row) => ({ value: row.id, label: row.name })),
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
+    [users],
   )
 
-  const audit = useAsync(
-    () =>
-      listAuditLogs({
-        q: debounced || undefined,
-        actions: action ? [action as AuditAction] : undefined,
-        severities: severities.length ? severities : undefined,
-        actorIds: actorId ? [actorId] : undefined,
-        entityTypes: entityType ? [entityType] : undefined,
-        dateFrom: dateFrom || undefined,
-        dateTo: dateTo || undefined,
-        page,
-        pageSize: 25,
-      }),
-    [debounced, action, severities, actorId, entityType, dateFrom, dateTo, page, version, tab],
-  )
+  const audit = useAuditLogs({
+    q: debounced || undefined,
+    actions: action ? [action as AuditAction] : undefined,
+    severities: severities.length ? severities : undefined,
+    actorIds: actorId ? [actorId] : undefined,
+    entityTypes: entityType ? [entityType] : undefined,
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+    page,
+    pageSize: 25,
+  }, tab === 'audit' && can('audit:read'))
 
-  const access = useAsync(
-    () =>
-      listAccessLogs({
-        q: debounced || undefined,
-        action: accessAction ? (accessAction as AccessLog['action']) : undefined,
-        page,
-        pageSize: 25,
-      }),
-    [debounced, accessAction, page, version, tab],
-  )
+  const access = useAccessLogs({
+    q: debounced || undefined,
+    action: accessAction ? (accessAction as AccessLog['action']) : undefined,
+    page,
+    pageSize: 25,
+  }, tab === 'access' && can('audit:read'))
 
   function switchTab(next: LogTab) {
     setTab(next)
@@ -161,7 +151,7 @@ export function AuditTrailPage() {
 
   function exportCurrent() {
     if (tab === 'audit') {
-      const rows = audit.data?.rows ?? []
+      const rows = audit?.rows ?? []
       downloadTextFile(
         'hyprep-foi-audit-trail.csv',
         toCsv(
@@ -180,7 +170,7 @@ export function AuditTrailPage() {
         'text/csv',
       )
     } else {
-      const rows = access.data?.rows ?? []
+      const rows = access?.rows ?? []
       downloadTextFile(
         'hyprep-foi-document-access-log.csv',
         toCsv(
@@ -200,11 +190,11 @@ export function AuditTrailPage() {
     toast.success('Export downloaded', 'The current page of the log has been written to CSV.')
   }
 
-  const total = tab === 'audit' ? audit.data?.total ?? 0 : access.data?.total ?? 0
-  const pageCount = tab === 'audit' ? audit.data?.pageCount ?? 1 : access.data?.pageCount ?? 1
-  const isLoading = tab === 'audit' ? audit.isLoading : access.isLoading
-  const criticalCount = (audit.data?.rows ?? []).filter((row) => row.severity === 'critical').length
-  const deniedCount = (access.data?.rows ?? []).filter((row) => row.action === 'denied').length
+  const total = tab === 'audit' ? audit?.total ?? 0 : access?.total ?? 0
+  const pageCount = tab === 'audit' ? audit?.pageCount ?? 1 : access?.pageCount ?? 1
+  const isLoading = tab === 'audit' ? audit === undefined : access === undefined
+  const criticalCount = (audit?.rows ?? []).filter((row) => row.severity === 'critical').length
+  const deniedCount = (access?.rows ?? []).filter((row) => row.action === 'denied').length
 
   return (
     <div className="space-y-5">
@@ -410,7 +400,7 @@ export function AuditTrailPage() {
                   </Tr>
                 </Thead>
                 <Tbody>
-                  {(audit.data?.rows ?? []).map((row) => {
+                  {(audit?.rows ?? []).map((row) => {
                     const actor = usersById.get(row.performedBy)
                     const meta = AUDIT_ACTION_META[row.action]
                     return (
@@ -472,7 +462,7 @@ export function AuditTrailPage() {
                   </Tr>
                 </Thead>
                 <Tbody>
-                  {(access.data?.rows ?? []).map((row) => {
+                  {(access?.rows ?? []).map((row) => {
                     const actor = usersById.get(row.userId)
                     const meta = ACCESS_META[row.action]
                     return (

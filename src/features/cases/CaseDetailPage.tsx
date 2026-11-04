@@ -36,12 +36,11 @@ import { CaseDocumentsPanel } from './components/CaseDocumentsPanel'
 import { CaseNotesPanel } from './components/CaseNotesPanel'
 import { CaseTasksPanel } from './components/CaseTasksPanel'
 import { CaseCourtPanel } from './components/CaseCourtPanel'
-import { getCaseBundle } from '@/mocks/api'
-import { db, userName } from '@/mocks/db'
+import { useCaseBundle } from '@/api/cases'
+import { useAccessLogs, useAuditLogs } from '@/api/audit'
 import { AUDIT_ACTION_META, AUDIT_SEVERITY_META } from '@/lib/constants'
 import { computeSla } from '@/lib/sla'
 import { formatDateTime, formatRelative } from '@/lib/format'
-import { useAsync } from '@/hooks/useAsync'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
 
@@ -55,23 +54,24 @@ export function CaseDetailPage() {
   const { id = '' } = useParams()
   const [params, setParams] = useSearchParams()
   const { user, can, isReadOnly } = useAuth()
-  const { version, refresh } = useData()
+  const { usersById, refresh } = useData()
+  const userName = (userId: string) => usersById.get(userId)?.name ?? userId
 
-  const bundle = useAsync(() => getCaseBundle(id), [id, version])
-  const data = bundle.data
+  const bundle = useCaseBundle(id)
+  const data = bundle
+  const auditResult = useAuditLogs({ pageSize: 200 }, can('audit:read'))
+  const accessResult = useAccessLogs({ pageSize: 200 }, can('audit:read'))
 
   const isRequestor = user?.roleId === 'requestor' || user?.roleId === 'external'
   const canSeeInternal = can('note:read:internal')
 
   const audit = useMemo(
-    () => db.auditLogs.filter((log) => log.entityId === id).slice(0, 60),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [id, version],
+    () => (auditResult?.rows ?? []).filter((log) => log.entityId === id).slice(0, 60),
+    [auditResult, id],
   )
   const access = useMemo(
-    () => db.accessLogs.filter((log) => log.caseId === id).slice(0, 40),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [id, version],
+    () => (accessResult?.rows ?? []).filter((log) => log.caseId === id).slice(0, 40),
+    [accessResult, id],
   )
 
   const tabs = useMemo<Array<TabItem<DetailTab>>>(() => {
@@ -112,8 +112,7 @@ export function CaseDetailPage() {
       list.push({ key: 'audit', label: 'Audit', icon: <ShieldCheck className="h-4 w-4" /> })
     }
     return list
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, isRequestor])
+  }, [can, data, isRequestor])
 
   const requested = (params.get('tab') ?? 'overview') as DetailTab
   const active: DetailTab = tabs.some((tab) => tab.key === requested) ? requested : 'overview'
@@ -125,7 +124,7 @@ export function CaseDetailPage() {
     setParams(draft, { replace: true })
   }
 
-  if (bundle.isLoading && !data) {
+  if (bundle === undefined) {
     return (
       <div className="space-y-4">
         <SkeletonCard lines={3} />

@@ -1,21 +1,20 @@
 import { useMemo, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Building2, Check, Eye, EyeOff, Mail, Minus, Phone, User as UserIcon } from 'lucide-react'
+import { AlertCircle, Building2, Check, Eye, EyeOff, Mail, Minus, Phone, User as UserIcon } from 'lucide-react'
 import { Button, Checkbox, Input } from '@/components/ui'
 import { formatDate } from '@/lib/format'
-import { cn, delay } from '@/lib/utils'
-import { reference } from '@/mocks/db'
+import { cn } from '@/lib/utils'
+import { authClient, convex } from '@/convexClient'
+import { api } from '../../../convex/_generated/api'
+import { usePublicSettings } from '@/api/directory'
 import { useToast } from '@/store/ToastContext'
 import { AuthLayout } from './AuthLayout'
 
-const MIN_LENGTH = reference.systemSettings.passwordMinLength
-const ROTATION_DAYS = reference.systemSettings.passwordRotationDays
-
 /** Scores a candidate password against the policy in FR-004. */
-function scorePassword(value: string) {
+function scorePassword(value: string, minLength: number) {
   const checks = [
-    { label: `At least ${MIN_LENGTH} characters`, ok: value.length >= MIN_LENGTH },
+    { label: `At least ${minLength} characters`, ok: value.length >= minLength },
     { label: 'An uppercase letter', ok: /[A-Z]/.test(value) },
     { label: 'A lowercase letter', ok: /[a-z]/.test(value) },
     { label: 'A number', ok: /\d/.test(value) },
@@ -57,6 +56,10 @@ function FormPart({
 export function RegisterPage() {
   const navigate = useNavigate()
   const toast = useToast()
+  const settings = usePublicSettings()
+  const registrationEnabled = settings?.selfRegistrationEnabled === true
+  const minLength = settings?.passwordMinLength ?? 8
+  const rotationDays = settings?.passwordRotationDays ?? 90
   const [form, setForm] = useState({
     name: '',
     email: '',
@@ -68,11 +71,12 @@ export function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [accepted, setAccepted] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const set = (key: keyof typeof form) => (event: { target: { value: string } }) =>
     setForm((current) => ({ ...current, [key]: event.target.value }))
 
-  const strength = useMemo(() => scorePassword(form.password), [form.password])
+  const strength = useMemo(() => scorePassword(form.password, minLength), [form.password, minLength])
   const mismatch = form.confirm.length > 0 && form.confirm !== form.password
   const compliant = strength.met === strength.checks.length
   const canSubmit = compliant && !mismatch && accepted && form.name.trim().length > 2
@@ -86,15 +90,85 @@ export function RegisterPage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (!canSubmit) return
+    if (!registrationEnabled || !canSubmit) return
     setBusy(true)
-    await delay(760)
-    setBusy(false)
-    toast.success(
-      'Account request submitted',
-      'Check your email for the activation link. You can then sign in and file a request.',
+    setError(null)
+    try {
+      const res = await authClient.signUp.email({
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase(),
+        password: form.password,
+      })
+      if (res.error) {
+        setError(res.error.message ?? 'Registration failed. Please try again.')
+        return
+      }
+      const phoneVal = form.phone.trim() || undefined
+      const orgVal = form.organization.trim() || undefined
+
+      if (phoneVal || orgVal) {
+        try {
+          await convex.mutation(api.auth.updateMyProfile, {
+            phone: phoneVal,
+            organization: orgVal,
+          });
+        } catch (updateErr) {
+          console.error('Failed to update extra profile fields', updateErr)
+          // We can proceed anyway; the account itself is registered.
+        }
+      }
+
+      toast.success(
+        'Requestor account created',
+        'You can now sign in and file a request under the Freedom of Information Act.',
+      )
+      navigate('/login', { replace: true })
+    } catch {
+      setError('Registration failed. Check your connection and try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (settings === undefined) {
+    return (
+      <AuthLayout
+        panel="public"
+        eyebrow="Public request portal"
+        title="Checking registration availability"
+        description="The public registration policy is being checked before the application can be opened."
+      >
+        <p className="text-sm text-ink-600" role="status">
+          Loading registration policy…
+        </p>
+      </AuthLayout>
     )
-    navigate('/login', { replace: true })
+  }
+
+  if (!registrationEnabled) {
+    return (
+      <AuthLayout
+        panel="public"
+        eyebrow="Public request portal"
+        title="Public registration is closed"
+        description="New requestor accounts are not currently being accepted. Contact the HYPREP Legal Unit if you need access to the request portal."
+        footer={
+          <p className="text-center text-sm text-ink-600">
+            <Link
+              to="/login"
+              className="font-medium text-brand-700 underline decoration-brand-300 underline-offset-2 hover:decoration-brand-600"
+            >
+              Return to sign in
+            </Link>
+          </p>
+        }
+      >
+        <div className="rounded-r-lg border-l-2 border-gold-500 bg-gold-50/70 px-4 py-3.5 text-sm leading-relaxed text-ink-700">
+          Registration has been disabled by an administrator. Existing requestor accounts can
+          continue to sign in and track their requests.
+        </div>
+      </AuthLayout>
+    )
   }
 
   return (
@@ -183,7 +257,7 @@ export function RegisterPage() {
         <FormPart
           mark="03"
           title="Credentials"
-          note={`Passwords must be at least ${MIN_LENGTH} characters and are rotated every ${ROTATION_DAYS} days.`}
+          note={`Passwords must be at least ${minLength} characters and are rotated every ${rotationDays} days.`}
         >
           <Input
             label="Password"
@@ -310,6 +384,16 @@ export function RegisterPage() {
               </div>
             </div>
           </div>
+
+          {error ? (
+            <div
+              role="alert"
+              className="flex items-start gap-2.5 rounded-r-lg border-l-2 border-crest-500 bg-crest-50 px-3.5 py-3 text-sm text-crest-800"
+            >
+              <AlertCircle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          ) : null}
 
           <Button type="submit" size="lg" fullWidth isLoading={busy} disabled={!canSubmit}>
             Submit application

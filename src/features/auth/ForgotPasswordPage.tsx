@@ -3,22 +3,29 @@ import type { FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2, Mail } from 'lucide-react'
 import { Button, Input } from '@/components/ui'
-import { delay } from '@/lib/utils'
-import { reference } from '@/mocks/db'
+import { authClient } from '@/convexClient'
+import { usePublicSettings } from '@/api/directory'
 import { AuthLayout } from './AuthLayout'
 
 export function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [sent, setSent] = useState(false)
+  const settings = usePublicSettings()
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setBusy(true)
-    await delay(680)
-    setBusy(false)
-    // Deliberately does not reveal whether the address is registered.
-    setSent(true)
+    try {
+      await authClient.requestPasswordReset({
+        email: email.trim().toLowerCase(),
+        redirectTo: `${window.location.origin}/reset-password`,
+      })
+      // Deliberately does not reveal whether the address is registered.
+      setSent(true)
+    } finally {
+      setBusy(false)
+    }
   }
 
   if (sent) {
@@ -32,8 +39,7 @@ export function ForgotPasswordPage() {
             be used once.
           </p>
           <p className="mt-3 text-xs text-ink-500">
-            Reset messages are sent from {reference.systemSettings.smtpFromAddress}. Check your junk
-            folder before contacting the administrator.
+            Check your junk folder before contacting the administrator.
           </p>
         </div>
         <Button
@@ -77,8 +83,8 @@ export function ForgotPasswordPage() {
       </form>
 
       <p className="mt-6 text-xs leading-relaxed text-ink-500">
-        Passwords must be at least {reference.systemSettings.passwordMinLength} characters and are
-        rotated every {reference.systemSettings.passwordRotationDays} days. Staff accounts that use
+        Passwords must be at least {settings?.passwordMinLength ?? 8} characters and are
+        rotated every {settings?.passwordRotationDays ?? 90} days. Staff accounts that use
         single sign-on should reset through the ministry identity provider instead.
       </p>
 

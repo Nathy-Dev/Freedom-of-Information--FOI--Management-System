@@ -18,8 +18,7 @@ import {
 } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
 import { PageHeader } from '@/components/common'
-import { deleteTemplate, renderTemplate, saveTemplate } from '@/mocks/adminApi'
-import { db, userName } from '@/mocks/db'
+import { useTemplates, useSaveTemplate, useDeleteTemplate, useRenderTemplate } from '@/api/templates'
 import { TEMPLATE_CATEGORY_LABELS } from '@/lib/constants'
 import { formatRelative } from '@/lib/format'
 import { cn, downloadTextFile } from '@/lib/utils'
@@ -67,8 +66,11 @@ const BLANK: Omit<LetterTemplate, 'updatedAt' | 'usageCount' | 'updatedBy'> = {
 export function TemplatesPage() {
   const [params, setParams] = useSearchParams()
   const { user, can } = useAuth()
-  const { version, refresh } = useData()
+  const { cases, usersById, refresh } = useData()
   const toast = useToast()
+  const convexSave = useSaveTemplate()
+  const convexDelete = useDeleteTemplate()
+  const convexRender = useRenderTemplate()
 
   const [category, setCategory] = useState<TemplateCategory | 'all'>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -78,27 +80,30 @@ export function TemplatesPage() {
   const [pendingDelete, setPendingDelete] = useState<LetterTemplate | null>(null)
   const [busy, setBusy] = useState(false)
 
+  const convexTemplates = useTemplates()
+  const userName = (id: string) => usersById.get(id)?.name ?? id
+
   const templates = useMemo(() => {
-    const rows = [...db.templates].sort((a, b) => a.name.localeCompare(b.name))
+    const source = convexTemplates ?? []
+    const rows = [...source].sort((a, b) => a.name.localeCompare(b.name))
     return category === 'all' ? rows : rows.filter((row) => row.category === category)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, version])
+  }, [category, convexTemplates])
 
   const selected = useMemo(
-    () => db.templates.find((row) => row.id === selectedId) ?? templates[0] ?? null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedId, templates, version],
+    () => [...(convexTemplates ?? [])].find((row) => row.id === selectedId) ?? templates[0] ?? null,
+    [selectedId, templates, convexTemplates],
   )
 
   const caseOptions = useMemo<SelectOption[]>(
-    () => [
-      { value: '', label: 'Choose a case to merge against' },
-      ...db.cases
-        .slice(0, 60)
-        .map((row) => ({ value: row.id, label: `${row.caseNumber} — ${row.subject.slice(0, 52)}` })),
-    ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
+    () => {
+      return [
+        { value: '', label: 'Choose a case to merge against' },
+        ...cases
+          .slice(0, 60)
+          .map((row) => ({ value: row.id, label: `${row.caseNumber} — ${row.subject.slice(0, 52)}` })),
+      ]
+    },
+    [cases],
   )
 
   useEffect(() => {
@@ -113,8 +118,10 @@ export function TemplatesPage() {
       toast.warning('Pick a case first', 'The merge fields are filled from the case record.')
       return
     }
-    setRendered(renderTemplate(selected, caseId, user))
-    refresh()
+    setBusy(true)
+    convexRender(selected.id, caseId)
+      .then((result) => setRendered(result?.body ?? null))
+      .finally(() => setBusy(false))
   }
 
   const persist = async () => {
@@ -125,18 +132,17 @@ export function TemplatesPage() {
     }
     setBusy(true)
     try {
-      const saved = await saveTemplate(
-        {
-          ...editing,
-          name: editing.name.trim(),
-          description: editing.description.trim(),
-          mergeFields: MERGE_TOKENS.filter((token) => editing.body.includes(token)),
-          updatedBy: user.id,
-        },
-        user.id,
-      )
+      const saved = await convexSave({
+        id: editing.id || undefined,
+        name: editing.name.trim(),
+        category: editing.category,
+        description: editing.description.trim(),
+        body: editing.body.trim(),
+        mergeFields: MERGE_TOKENS.filter((token) => editing.body.includes(token)),
+      })
+      if (!saved) throw new Error('Template was not returned after saving.')
       refresh()
-      setSelectedId(saved.id)
+      setSelectedId(saved?._id ?? null)
       setEditing(null)
       toast.success('Template saved', `${saved.name} is available to the Legal Unit.`)
     } finally {
@@ -148,7 +154,7 @@ export function TemplatesPage() {
     if (!pendingDelete || !user) return
     setBusy(true)
     try {
-      await deleteTemplate(pendingDelete.id, user.id)
+      await convexDelete(pendingDelete.id)
       refresh()
       setPendingDelete(null)
       setSelectedId(null)
@@ -177,7 +183,7 @@ export function TemplatesPage() {
 
       <div className="flex flex-wrap items-center gap-1.5">
         <ChoiceChip selected={category === 'all'} onClick={() => setCategory('all')}>
-          All ({db.templates.length})
+          All ({(convexTemplates ?? []).length})
         </ChoiceChip>
         {CATEGORY_ORDER.map((item) => (
           <ChoiceChip key={item} selected={category === item} onClick={() => setCategory(item)}>
@@ -329,7 +335,7 @@ export function TemplatesPage() {
                         <Button
                           size="sm"
                           onClick={() => {
-                            const foiCase = db.cases.find((row) => row.id === caseId)
+                            const foiCase = cases.find((row) => row.id === caseId)
                             downloadTextFile(
                               `${(foiCase?.caseNumber ?? 'letter').replace(/\//g, '-')}-${selected.category}.txt`,
                               rendered,

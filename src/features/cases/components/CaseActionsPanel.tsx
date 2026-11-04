@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { AlertTriangle, Link2, Lock, Workflow } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import type { CaseFilters, CasePriority, CaseStatus, FoiCase } from '@/types'
+import type { CasePriority, CaseStatus, FoiCase } from '@/types'
 import {
   Badge,
   Button,
@@ -14,19 +14,12 @@ import {
   Textarea,
 } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
-import {
-  assignCase,
-  changeCaseStatus,
-  closeCase,
-  linkCases,
-  selectCases,
-  unlinkCases,
-  updateCase,
-} from '@/mocks/api'
-import { reference } from '@/mocks/db'
+import { useAssignCase, useChangeStatus, useCloseCase, useLinkCases, useUnlinkCases, useUpdateCase } from '@/api/cases'
+import { useData } from '@/store/DataContext'
 import { PRIORITY_META, STATUS_META } from '@/lib/constants'
 import { useAuth } from '@/store/AuthContext'
 import { useToast } from '@/store/ToastContext'
+import { EMPTY_REFERENCE } from '@/api/directory'
 
 export interface CaseActionsPanelProps {
   foiCase: FoiCase
@@ -45,14 +38,22 @@ const PRIORITY_OPTIONS: SelectOption[] = (
 /** FR-014, FR-016, FR-023 to FR-025: the caseworker's action rail. */
 export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPanelProps) {
   const { user, can, isReadOnly } = useAuth()
+  const { cases, reference } = useData()
+  const liveReference = reference ?? EMPTY_REFERENCE
+  const assignCase = useAssignCase()
+  const changeCaseStatus = useChangeStatus()
+  const closeCase = useCloseCase()
+  const linkCases = useLinkCases()
+  const unlinkCases = useUnlinkCases()
+  const updateCase = useUpdateCase()
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   const [closeOpen, setCloseOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
   const [escalateOpen, setEscalateOpen] = useState(false)
 
-  const [outcomeCode, setOutcomeCode] = useState(reference.outcomeCodes[0]?.label ?? 'Granted in full')
-  const [closureReason, setClosureReason] = useState(reference.closureReasons[0]?.label ?? '')
+  const [outcomeCode, setOutcomeCode] = useState('')
+  const [closureReason, setClosureReason] = useState('')
   const [closureNote, setClosureNote] = useState('')
   const [linkTarget, setLinkTarget] = useState('')
 
@@ -69,7 +70,7 @@ export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPane
     }
   }
 
-  const candidates = selectCases(user, { q: '' } as CaseFilters)
+  const candidates = cases
     .filter((row) => row.id !== foiCase.id && !foiCase.linkedCaseIds.includes(row.id))
     .slice(0, 60)
 
@@ -89,11 +90,11 @@ export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPane
             value={foiCase.assignedTo ?? ''}
             options={[
               { value: '', label: 'Unassigned' },
-              ...reference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name })),
+              ...liveReference.assignableStaff.map((staff) => ({ value: staff.id, label: staff.name })),
             ]}
             onChange={(event) =>
               run(
-                () => assignCase(foiCase.id, event.target.value || null, user.id),
+                () => assignCase(foiCase.id, event.target.value || null),
                 event.target.value ? 'Case reassigned' : 'Assignment cleared',
                 event.target.value ? 'The officer has been notified.' : undefined,
               )
@@ -108,7 +109,7 @@ export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPane
             hint="Changing the status notifies the requestor and writes to the timeline."
             onChange={(event) =>
               run(
-                () => changeCaseStatus(foiCase.id, event.target.value as CaseStatus, user.id),
+                () => changeCaseStatus(foiCase.id, event.target.value as CaseStatus),
                 'Status updated',
                 `Now ${STATUS_META[event.target.value as CaseStatus].label}.`,
               )
@@ -123,12 +124,7 @@ export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPane
             onChange={(event) =>
               run(
                 () =>
-                  updateCase(
-                    foiCase.id,
-                    { priority: event.target.value as CasePriority },
-                    user.id,
-                    `Priority set to ${event.target.value}.`,
-                  ),
+                  updateCase(foiCase.id, { priority: event.target.value as CasePriority }),
                 'Priority updated',
               )
             }
@@ -189,7 +185,7 @@ export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPane
                         type="button"
                         className="text-2xs text-ink-400 underline hover:text-crest-600"
                         onClick={() =>
-                          run(() => unlinkCases(foiCase.id, row.id, user.id), 'Link removed', row.caseNumber)
+                          run(() => unlinkCases(foiCase.id, row.id), 'Link removed', row.caseNumber)
                         }
                       >
                         Unlink
@@ -221,8 +217,9 @@ export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPane
                   () =>
                     closeCase(
                       foiCase.id,
-                      { outcomeCode, closureReason, note: closureNote.trim() || undefined },
-                      user.id,
+                      outcomeCode,
+                      closureReason,
+                      closureNote.trim() || undefined,
                     ),
                   'Case closed',
                   `${foiCase.caseNumber} — ${outcomeCode}.`,
@@ -238,13 +235,13 @@ export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPane
         <div className="space-y-4">
           <Select
             label="Outcome"
-            options={reference.outcomeCodes.map((code) => ({ value: code.label, label: code.label }))}
+            options={liveReference.outcomeCodes.map((code) => ({ value: code.label, label: code.label }))}
             value={outcomeCode}
             onChange={(event) => setOutcomeCode(event.target.value)}
           />
           <Select
             label="Closure reason"
-            options={reference.closureReasons.map((item) => ({ value: item.label, label: item.label }))}
+            options={liveReference.closureReasons.map((item) => ({ value: item.label, label: item.label }))}
             value={closureReason}
             onChange={(event) => setClosureReason(event.target.value)}
           />
@@ -272,7 +269,7 @@ export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPane
               isLoading={busy}
               disabled={!linkTarget}
               onClick={async () => {
-                await run(() => linkCases(foiCase.id, linkTarget, user.id), 'Cases linked')
+                await run(() => linkCases(foiCase.id, linkTarget), 'Cases linked')
                 setLinkTarget('')
                 setLinkOpen(false)
               }}
@@ -310,7 +307,7 @@ export function CaseActionsPanel({ foiCase, linked, onChanged }: CaseActionsPane
         }
         onConfirm={async () => {
           await run(
-            () => changeCaseStatus(foiCase.id, 'escalated', user.id, 'Escalated from the case file.'),
+            () => changeCaseStatus(foiCase.id, 'escalated', 'Escalated from the case file.'),
             'Case escalated',
             'The Head of Legal Unit has been notified.',
           )

@@ -11,8 +11,8 @@ import {
 
 /**
  * Formatting helpers. All dates are rendered in the Africa/Lagos context
- * required by the Terms of Reference (section 25) - mock timestamps are generated
- * as local ISO strings, so no timezone conversion is applied on read.
+ * required by the Terms of Reference (section 25). Convex stores timestamps as
+ * ISO strings; the display layer renders them in the browser's configured locale.
  */
 
 export const TIMEZONE_LABEL = 'Africa/Lagos (WAT)'

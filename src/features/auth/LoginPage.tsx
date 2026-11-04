@@ -2,16 +2,14 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { AlertCircle, Eye, EyeOff, KeyRound, Lock, Mail, ShieldCheck } from 'lucide-react'
-import { Button, Checkbox, Input, UserAvatar } from '@/components/ui'
-import { ROLE_LABELS } from '@/lib/constants'
-import { useAuth, DEMO_MFA_CODE } from '@/store/AuthContext'
-import { homeRouteFor } from '@/lib/rbac'
-import { usersById } from '@/mocks/db'
+import { Button, Checkbox, Input } from '@/components/ui'
+import { useAuth } from '@/store/AuthContext'
+import { usePublicSettings } from '@/api/directory'
 import { AuthLayout } from './AuthLayout'
-import { DemoAccountPicker } from './DemoAccountPicker'
 
 export function LoginPage() {
   const { login, loginWithSso, verifyMfa, cancelMfa, pendingMfaUserId } = useAuth()
+  const settings = usePublicSettings()
   const navigate = useNavigate()
   const location = useLocation()
   const intended = (location.state as { from?: string } | null)?.from
@@ -24,7 +22,10 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'password' | 'sso' | 'mfa' | null>(null)
 
-  const land = (roleId: string) => navigate(intended ?? homeRouteFor(roleId), { replace: true })
+  // After sign-in, navigate to '/' — the RequireAnonymous guard and HomeRedirect
+  // will dispatch the user to their correct dashboard once the Convex `me` query
+  // resolves. Trying to call homeRouteFor() here races against the async session.
+  const land = () => navigate(intended ?? '/', { replace: true })
 
   const submitCredentials = async (event: FormEvent) => {
     event.preventDefault()
@@ -33,7 +34,7 @@ export function LoginPage() {
     const outcome = await login(email, password)
     setBusy(null)
     if (outcome.status === 'error') setError(outcome.message)
-    else if (outcome.status === 'success') land(outcome.user.roleId)
+    else if (outcome.status === 'success') land()
   }
 
   const submitSso = async () => {
@@ -42,7 +43,7 @@ export function LoginPage() {
     const outcome = await loginWithSso()
     setBusy(null)
     if (outcome.status === 'error') setError(outcome.message)
-    else if (outcome.status === 'success') land(outcome.user.roleId)
+    else if (outcome.status === 'success') land()
   }
 
   const submitMfa = async (event: FormEvent) => {
@@ -52,7 +53,7 @@ export function LoginPage() {
     const outcome = await verifyMfa(code)
     setBusy(null)
     if (outcome.status === 'error') setError(outcome.message)
-    else if (outcome.status === 'success') land(outcome.user.roleId)
+    else if (outcome.status === 'success') land()
   }
 
   /* Refusals are set as a notice against a rule, not as a rounded alert pill. */
@@ -68,7 +69,6 @@ export function LoginPage() {
 
   // Stage two: the second factor for privileged roles (FR-005).
   if (pendingMfaUserId) {
-    const pending = usersById.get(pendingMfaUserId)
     return (
       <AuthLayout
         eyebrow="Second factor"
@@ -77,18 +77,6 @@ export function LoginPage() {
       >
         <form onSubmit={submitMfa} className="space-y-5">
           {errorBanner}
-
-          {pending ? (
-            <div className="flex items-center gap-3 rounded-xl border border-ink-200 bg-ink-50/70 px-3.5 py-3">
-              <UserAvatar user={pending} size="sm" />
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-ink-900">{pending.name}</p>
-                <p className="truncate font-mono text-2xs uppercase tracking-[0.16em] text-ink-500">
-                  {ROLE_LABELS[pending.roleId]}
-                </p>
-              </div>
-            </div>
-          ) : null}
 
           <Input
             label="Verification code"
@@ -99,7 +87,6 @@ export function LoginPage() {
             onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))}
             leadingIcon={<KeyRound aria-hidden className="h-4 w-4" />}
             placeholder="000000"
-            hint={`Demo code: ${DEMO_MFA_CODE}`}
             className="h-14 pl-9 pr-4 text-center font-mono text-lg tracking-[0.45em]"
             required
           />
@@ -128,29 +115,6 @@ export function LoginPage() {
       eyebrow="Registry access"
       title="Sign in"
       description="For officers of the HYPREP Legal Unit, and for members of the public tracking a request they have already filed."
-      footer={
-        <div>
-          <div className="flex items-center justify-between gap-3">
-            <p className="flex items-center gap-2.5 font-mono text-2xs uppercase tracking-[0.2em] text-ink-500">
-              <span aria-hidden className="h-3 w-0.5 shrink-0 bg-ink-300" />
-              Demonstration accounts
-            </p>
-            <span className="shrink-0 rounded-full border border-gold-300 bg-gold-50 px-2 py-0.5 font-mono text-2xs uppercase tracking-[0.14em] text-gold-700">
-              Prototype
-            </span>
-          </div>
-          <p className="mt-2.5 text-xs leading-relaxed text-ink-500">
-            This build holds no live records. Enter as any user class to see the register under that
-            permission set — no password required.
-          </p>
-          <div className="mt-4">
-            <DemoAccountPicker
-              variant="ledger"
-              onPicked={(userId) => land(usersById.get(userId)?.roleId ?? 'requestor')}
-            />
-          </div>
-        </div>
-      }
     >
       <form onSubmit={submitCredentials} className="space-y-5">
         {errorBanner}
@@ -241,17 +205,19 @@ export function LoginPage() {
         </Button>
       </div>
 
-      <p className="mt-6 text-sm leading-relaxed text-ink-600">
-        Making a request as a member of the public?{' '}
-        <Link
-          to="/register"
-          className="font-medium text-brand-700 underline decoration-brand-300 underline-offset-2 hover:decoration-brand-600"
-        >
-          Create a requestor account
-        </Link>{' '}
-        — the right of access under section 1 of the Freedom of Information Act 2011 belongs to any
-        person.
-      </p>
+      {settings?.selfRegistrationEnabled ? (
+        <p className="mt-6 text-sm leading-relaxed text-ink-600">
+          Making a request as a member of the public?{' '}
+          <Link
+            to="/register"
+            className="font-medium text-brand-700 underline decoration-brand-300 underline-offset-2 hover:decoration-brand-600"
+          >
+            Create a requestor account
+          </Link>{' '}
+          — the right of access under section 1 of the Freedom of Information Act 2011 belongs to any
+          person.
+        </p>
+      ) : null}
     </AuthLayout>
   )
 }

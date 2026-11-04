@@ -4,7 +4,7 @@ import type { CaseTask } from '@/types'
 import { Card, CardBody, CardHeader, EmptyState, TaskStatusBadge } from '@/components/ui'
 import { formatSmartDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { db } from '@/mocks/db'
+import { useData } from '@/store/DataContext'
 
 /** "My work" panel: the tasks assigned to the signed-in officer (FR-022). */
 export function TaskListCard({
@@ -20,6 +20,7 @@ export function TaskListCard({
   limit?: number
   onToggle?: (task: CaseTask) => void
 }) {
+  const { cases } = useData()
   const today = new Date().toISOString().slice(0, 10)
   const rows = tasks.slice(0, limit)
 
@@ -43,7 +44,7 @@ export function TaskListCard({
         ) : (
           <ul className="divide-y divide-ink-100">
             {rows.map((task) => {
-              const parent = db.cases.find((row) => row.id === task.caseId)
+              const parent = cases.find((row) => row.id === task.caseId)
               const overdue = task.status !== 'done' && task.dueDate.slice(0, 10) < today
               return (
                 <li key={task.id} className="flex items-start gap-3 px-4 py-3">

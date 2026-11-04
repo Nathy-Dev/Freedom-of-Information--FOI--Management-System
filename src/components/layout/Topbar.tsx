@@ -1,10 +1,9 @@
 import { useNavigate } from 'react-router-dom'
-import { Command, HelpCircle, LogOut, Menu, Plus, Search, Settings, UserCircle, UserCog } from 'lucide-react'
+import { Command, HelpCircle, LogOut, Menu, Plus, Search, Settings, UserCircle } from 'lucide-react'
 import { ROLE_LABELS } from '@/lib/constants'
 import { TIMEZONE_LABEL } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/store/AuthContext'
-import { reference } from '@/mocks/db'
 import { Badge, Button, Dropdown, Tooltip, UserAvatar } from '@/components/ui'
 import { NotificationBell } from './NotificationBell'
 
@@ -15,11 +14,10 @@ interface TopbarProps {
 
 /**
  * Top utility bar: global search, prominent quick-create, notifications and the
- * account menu (Terms of Reference section 30). The role switcher is a
- * demonstration aid so a reviewer can see every user class without signing out.
+ * account menu (Terms of Reference section 30).
  */
 export function Topbar({ onOpenMobileNav, onOpenPalette }: TopbarProps) {
-  const { user, role, isReadOnly, can, logout, loginAs } = useAuth()
+  const { user, role, isReadOnly, can, logout } = useAuth()
   const navigate = useNavigate()
   if (!user) return null
 
@@ -114,32 +112,17 @@ export function Topbar({ onOpenMobileNav, onOpenPalette }: TopbarProps) {
             { key: 'profile', label: 'My profile', icon: <UserCircle className="h-4 w-4" />, onSelect: () => navigate('/profile') },
             { key: 'security', label: 'Security & sessions', icon: <Settings className="h-4 w-4" />, onSelect: () => navigate('/profile?tab=security') },
             {
-              key: 'switch',
-              label: 'Switch demo account',
-              icon: <UserCog className="h-4 w-4" />,
-              separated: true,
-              onSelect: () => navigate('/switch-account'),
-            },
-            {
               key: 'logout',
               label: 'Sign out',
               icon: <LogOut className="h-4 w-4" />,
               danger: true,
               separated: true,
-              onSelect: () => {
-                logout()
+              onSelect: async () => {
+                await logout()
                 navigate('/login', { replace: true })
               },
             },
           ]}
-          footer={
-            <p className="text-[10px] leading-relaxed text-ink-400">
-              Demonstration build · {reference.demoAccounts.length} sample accounts ·{' '}
-              <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => loginAs('usr-001')}>
-                reset to Super-Admin
-              </button>
-            </p>
-          }
         />
       </div>
     </header>

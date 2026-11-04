@@ -4,7 +4,7 @@ import type { FoiCase } from '@/types'
 import { Card, CardBody, CardHeader, EmptyState, PriorityBadge, SlaBadge, StatusBadge } from '@/components/ui'
 import { computeSla } from '@/lib/sla'
 import { formatRelative } from '@/lib/format'
-import { userName } from '@/mocks/db'
+import { useData } from '@/store/DataContext'
 
 /** Compact, colour-coded case list used across every role dashboard. */
 export function CaseMiniList({
@@ -24,6 +24,8 @@ export function CaseMiniList({
   showAssignee?: boolean
   limit?: number
 }) {
+  const { usersById } = useData()
+  const userName = (id: string | null | undefined) => usersById.get(id ?? '')?.name ?? 'Unknown user'
   const rows = cases.slice(0, limit)
 
   return (

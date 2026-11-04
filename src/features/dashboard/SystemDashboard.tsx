@@ -12,8 +12,9 @@ import {
 import { Badge, ButtonLink, Card, CardBody, CardHeader, StatCard, Table, TableWrap, Tbody, Td, Th, Thead, Tr } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { BarChartCard, StatusDonut, TrendChart } from '@/components/charts'
-import { dashboardMetrics } from '@/mocks/metrics'
-import { db, reference } from '@/mocks/db'
+import { useDashboardMetrics } from '@/api/dashboard'
+import { useAuditLogs } from '@/api/audit'
+import { useBackups, useServiceHealth } from '@/api/directory'
 import { AUDIT_SEVERITY_META, ROLE_LABELS } from '@/lib/constants'
 import { formatBytes, formatDateTime, formatNumber, formatRelative } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -28,12 +29,13 @@ const HEALTH_TONE = {
 
 /** FR-060: the Super-Admin view — platform health, accounts, storage, audit. */
 export function SystemDashboard() {
-  const { version } = useData()
+  const { cases, documents, users } = useData()
+  const metrics = useDashboardMetrics()
+  const audit = useAuditLogs({ pageSize: 200 })
+  const backups = useBackups()
+  const health = useServiceHealth()
 
   const view = useMemo(() => {
-    const metrics = dashboardMetrics(db.cases, reference.assignableStaff)
-    const users = reference.users
-
     const byRole = Object.entries(
       users.reduce<Record<string, number>>((acc, user) => {
         acc[user.roleId] = (acc[user.roleId] ?? 0) + 1
@@ -44,13 +46,18 @@ export function SystemDashboard() {
       value: count,
     }))
 
-    const storageBytes = db.documents.reduce((total, doc) => total + doc.fileSize, 0)
-    const criticalAudit = db.auditLogs
+    const storageBytes = documents.reduce((total, doc) => total + doc.fileSize, 0)
+    const criticalAudit = (audit?.rows ?? [])
       .filter((log) => log.severity === 'critical' || log.severity === 'warning')
       .slice(0, 7)
 
     return {
-      metrics,
+      metrics: metrics ?? {
+        totalCases: 0, openCases: 0, overdueCases: 0, dueSoonCases: 0, closedThisMonth: 0,
+        avgResponseDays: 0, slaComplianceRate: 0, appealsCount: 0, escalationsCount: 0,
+        statusCounts: [], trend: [], aging: [], byDepartment: [], topRequestors: [], workload: [],
+        recentCases: [], upcomingHearings: [], tasks: [], activity: [],
+      },
       users,
       byRole,
       storageBytes,
@@ -59,12 +66,11 @@ export function SystemDashboard() {
       lockedUsers: users.filter((user) => user.status === 'suspended').length,
       invited: users.filter((user) => user.status === 'invited').length,
       mfaAdoption: Math.round((users.filter((user) => user.mfaEnabled).length / users.length) * 100),
-      recent: db.cases.slice(0, 6),
-      backups: reference.backups,
-      health: reference.serviceHealth,
+      recent: metrics?.recentCases ?? cases.slice(0, 6),
+      backups: backups ?? [],
+      health: health ?? [],
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version])
+  }, [audit, backups, cases, documents, health, metrics, users])
 
   return (
     <div className="space-y-6">
@@ -111,7 +117,7 @@ export function SystemDashboard() {
         <StatCard
           label="Document storage"
           value={formatBytes(view.storageBytes)}
-          hint={`${formatNumber(db.documents.length)} files in ${reference.systemSettings.storageBucket}`}
+          hint={`${formatNumber(documents.length)} files in Convex file storage`}
           icon={<HardDriveDownload aria-hidden className="h-4.5 w-4.5" />}
           tone="neutral"
           to="/documents"

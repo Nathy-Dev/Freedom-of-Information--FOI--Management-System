@@ -4,22 +4,30 @@ import { Eye, FileSearch, Gauge, ScrollText, ShieldCheck, TriangleAlert } from '
 import { Badge, ButtonLink, Card, CardBody, CardHeader, StatCard } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { BarChartCard, SlaGauge, StatusDonut } from '@/components/charts'
-import { dashboardMetrics } from '@/mocks/metrics'
-import { db, reference } from '@/mocks/db'
+import { useDashboardMetrics } from '@/api/dashboard'
+import { useAccessLogs, useAuditLogs } from '@/api/audit'
 import { AUDIT_ACTION_META } from '@/lib/constants'
 import { formatDateTime, formatDays, formatNumber, formatPercent } from '@/lib/format'
 import { useData } from '@/store/DataContext'
 
 /** FR-006: the Auditor's read-only compliance view. Nothing here mutates data. */
 export function AuditorDashboard() {
-  const { version } = useData()
+  const { cases, documents } = useData()
+  const liveMetrics = useDashboardMetrics()
+  const audit = useAuditLogs({ pageSize: 200 })
+  const access = useAccessLogs({ pageSize: 1 })
 
   const view = useMemo(() => {
-    const metrics = dashboardMetrics(db.cases, reference.assignableStaff)
+    const metrics = liveMetrics ?? {
+      totalCases: 0, openCases: 0, overdueCases: 0, dueSoonCases: 0, closedThisMonth: 0,
+      avgResponseDays: 0, slaComplianceRate: 0, appealsCount: 0, escalationsCount: 0,
+      statusCounts: [], trend: [], aging: [], byDepartment: [], topRequestors: [], workload: [],
+      recentCases: [], upcomingHearings: [], tasks: [], activity: [],
+    }
 
     const aging = metrics.aging.map((bucket) => ({ label: bucket.bucket, value: bucket.count }))
 
-    const breaches = db.cases
+    const breaches = cases
       .filter((row) => row.respondedAt && row.respondedAt.slice(0, 10) > row.statutoryDueDate)
       .slice(0, 8)
 
@@ -27,14 +35,13 @@ export function AuditorDashboard() {
       metrics,
       aging,
       breaches,
-      auditCount: db.auditLogs.length,
-      accessCount: db.accessLogs.length,
-      criticalCount: db.auditLogs.filter((log) => log.severity === 'critical').length,
-      latest: db.auditLogs.slice(0, 8),
-      redacted: db.documents.filter((doc) => doc.isRedacted).length,
+      auditCount: audit?.total ?? 0,
+      accessCount: access?.total ?? 0,
+      criticalCount: (audit?.rows ?? []).filter((log) => log.severity === 'critical').length,
+      latest: (audit?.rows ?? []).slice(0, 8),
+      redacted: documents.filter((doc) => doc.isRedacted).length,
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version])
+  }, [access, audit, cases, documents, liveMetrics])
 
   const { metrics } = view
 
