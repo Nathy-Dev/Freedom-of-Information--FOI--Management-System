@@ -9,7 +9,7 @@
       "destination": "https://compassionate-caterpillar-373.eu-west-1.convex.site/api/auth/:path*"
     },
     {
-      "source": "/((?!api/).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
