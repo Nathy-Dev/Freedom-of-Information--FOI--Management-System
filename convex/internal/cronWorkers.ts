@@ -7,6 +7,8 @@ import { v } from "convex/values";
 import { computeSla } from "../lib/sla";
 import { pushNotification } from "../lib/notifications";
 import { SYSTEM_ACTOR_ID } from "../lib/audit";
+import { internal } from "../_generated/api";
+import { components } from "../_generated/api";
 
 /* ------------------------------------------------------------------ *
  * SLA monitor
@@ -149,32 +151,12 @@ export const sendCourtReminders = internalMutation({
 export const dueReports = internalQuery({
   args: { now: v.string() },
   handler: async (ctx, args) => {
-    const rows = await ctx.db.query("reports").take(200);
+    const rows = await ctx.db.query("reports").withIndex("by_next_run", (query) => query.gt("nextRun", "").lte("nextRun", args.now)).take(100);
     return rows
       .filter((r) => r.cadence !== "none" && r.nextRun && r.nextRun <= args.now)
       .map((r) => ({ id: r._id, name: r.name, recipients: r.recipients }));
   },
 });
-
-export const markReportRun = internalMutation({
-  args: { reportId: v.id("reports"), now: v.string() },
-  handler: async (ctx, args) => {
-    const report = await ctx.db.get("reports", args.reportId);
-    if (!report) return null;
-    const nextRun = advanceCadence(report.cadence, args.now);
-    await ctx.db.patch("reports", args.reportId, { lastRun: args.now, nextRun });
-    return null;
-  },
-});
-
-function advanceCadence(cadence: string, fromIso: string): string {
-  const d = new Date(fromIso);
-  if (cadence === "weekly") d.setDate(d.getDate() + 7);
-  else if (cadence === "monthly") d.setMonth(d.getMonth() + 1);
-  else if (cadence === "quarterly") d.setMonth(d.getMonth() + 3);
-  else if (cadence === "yearly") d.setFullYear(d.getFullYear() + 1);
-  return d.toISOString();
-}
 
 /* ------------------------------------------------------------------ *
  * Retention
@@ -182,28 +164,37 @@ function advanceCadence(cadence: string, fromIso: string): string {
 
 export const applyRetention = internalMutation({
   args: { now: v.string() },
+  returns: v.object({ deleted: v.number(), reviewRequired: v.number() }),
   handler: async (ctx, args) => {
-    const rows = await ctx.db
+    const state = await ctx.db.query("maintenanceCursors").withIndex("by_job", (query) => query.eq("job", "retention")).unique();
+    const result = await ctx.db
       .query("documents")
-      .withIndex("by_retention")
-      .filter((q) => q.lte("retainUntil", args.now))
-      .take(500);
-    for (const d of rows) {
-      await ctx.db.delete("documents", d._id);
+      .withIndex("by_retention", (query) => query.lte("retainUntil", args.now))
+      .paginate({ cursor: state?.cursor ?? null, numItems: 100, maximumBytesRead: 500000 });
+    const cursor = result.isDone ? null : result.continueCursor;
+    if (state) await ctx.db.patch(state._id, { cursor });
+    else await ctx.db.insert("maintenanceCursors", { job: "retention", cursor });
+    let reviewRequired = 0;
+    for (const d of result.page) {
+      const caseRecord = await ctx.db.get(d.caseId);
+      if (!caseRecord || !caseRecord.dateClosed || d.legalHold || d.retentionReviewAt) continue;
+      await ctx.db.patch(d._id, { retentionReviewAt: args.now });
+      reviewRequired += 1;
     }
-    await ctx.db.insert("auditLogs", {
+    if (reviewRequired) await ctx.db.insert("auditLogs", {
       entityType: "Retention",
       entityId: "cron",
       entityLabel: "Retention policy",
-      action: "delete",
+      action: "update",
       performedBy: SYSTEM_ACTOR_ID,
       timestamp: args.now,
-      details: `Archived ${rows.length} documents past retention date.`,
+      details: `${reviewRequired} documents marked for retention review. No files or records were deleted. Legal approval is required before disposal.`,
       ipAddress: "",
       userAgent: "",
       severity: "info",
     });
-    return { deleted: rows.length };
+    if (!result.isDone) await ctx.scheduler.runAfter(1000, internal.internal.cronWorkers.applyRetention, { now: args.now });
+    return { deleted: 0, reviewRequired };
   },
 });
 
@@ -216,9 +207,26 @@ export const pendingDocuments = internalQuery({
   handler: async (ctx) => {
     const rows = await ctx.db
       .query("documents")
-      .withIndex("by_kind")
-      .filter((q) => q.eq("virusScan", "pending"))
+      .withIndex("by_virus_scan", (query) => query.eq("virusScan", "pending"))
       .take(200);
     return rows.map((d) => ({ id: d._id }));
+  },
+});
+
+export const cleanupSessions = internalMutation({
+  args: {},
+  returns: v.object({ removed: v.number() }),
+  handler: async (ctx) => {
+    const settings = await ctx.db.query("systemSettings").first();
+    const timeout = settings?.sessionTimeoutMinutes ?? 30;
+    if (timeout <= 0) return { removed: 0 };
+    const cutoff = Date.now() - Math.max(1, timeout) * 60000;
+    const sessions = await ctx.db.query("userSessions").withIndex("by_last_seen", (query) => query.lt("lastSeenAt", cutoff)).take(100);
+    for (const session of sessions) {
+      await ctx.runMutation(components.betterAuth.adapter.deleteOne, { input: { model: "session", where: [{ field: "_id", value: session.authSessionId }] } });
+      await ctx.db.delete(session._id);
+    }
+    if (sessions.length === 100) await ctx.scheduler.runAfter(1000, internal.internal.cronWorkers.cleanupSessions, {});
+    return { removed: sessions.length };
   },
 });

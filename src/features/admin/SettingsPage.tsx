@@ -36,6 +36,8 @@ import type { BadgeTone, SelectOption, TabItem } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { useBackups, useRunBackup, useServiceHealth, useSystemSettings, useUpdateSettings } from '@/api/directory'
 import { useExport } from '@/api/reports'
+import { useMutation } from 'convex/react'
+import { api } from '../../../convex/_generated/api'
 import { TIMEZONE_LABEL, formatDateTime, formatNumber, formatRelative } from '@/lib/format'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
@@ -108,11 +110,13 @@ export function SettingsPage() {
   const backups = useBackups(can('system:backup'))
   const updateSettings = useUpdateSettings()
   const runBackup = useRunBackup()
+  const downloadBackup = useMutation(api.fileAccess.downloadBackup)
+  const [downloadingBackup, setDownloadingBackup] = useState<string | null>(null)
   const exportData = useExport()
   const [form, setForm] = useState<SystemSettings | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [busyScope, setBusyScope] = useState<ExportScope | null>(null)
-  const [backupType, setBackupType] = useState<BackupRecord['type']>('incremental')
+  const [backupType, setBackupType] = useState<BackupRecord['type']>('full')
   const [isBackingUp, setIsBackingUp] = useState(false)
   const lastLoadedSettings = useRef<string | null>(null)
 
@@ -195,6 +199,8 @@ export function SettingsPage() {
         `${backupType === 'full' ? 'Full' : 'Incremental'} backup started`,
         `Job ${record.id} is writing to ${record.target}.`,
       )
+    } catch (error) {
+      toast.error('Record export failed', error instanceof Error ? error.message : 'Please try again.')
     } finally {
       setIsBackingUp(false)
     }
@@ -552,8 +558,7 @@ export function SettingsPage() {
                   <div className="flex items-center gap-2">
                     <Select
                       options={[
-                        { value: 'incremental', label: 'Incremental' },
-                        { value: 'full', label: 'Full' },
+                        { value: 'full', label: 'Full record export' },
                       ]}
                       value={backupType}
                       onChange={(event) => setBackupType(event.target.value as BackupRecord['type'])}
@@ -566,7 +571,7 @@ export function SettingsPage() {
                       onClick={triggerBackup}
                       isLoading={isBackingUp}
                     >
-                      Run now
+                      Export records
                     </Button>
                   </div>
                 ) : null
@@ -584,6 +589,7 @@ export function SettingsPage() {
                       <Th>Status</Th>
                       <Th>Restore tested</Th>
                       <Th>Target</Th>
+                      <Th>Archive</Th>
                     </Tr>
                   </Thead>
                   <Tbody>
@@ -609,7 +615,25 @@ export function SettingsPage() {
                             <span className="text-xs text-ink-400">Not tested</span>
                           )}
                         </Td>
-                        <Td className="font-mono text-2xs text-ink-500">{row.target}</Td>
+                        <Td className="font-mono text-2xs text-ink-500">{row.target}{row.error ? <p role="alert" className="text-crest-700">{row.error}</p> : null}</Td>
+                        <Td>{row.status === 'success' && row.storageId ? <Button size="sm" variant="secondary" isLoading={downloadingBackup === row.id} onClick={async () => {
+                          setDownloadingBackup(row.id)
+                          try {
+                            const archive = await downloadBackup({ id: row.id as never })
+                            const response = await fetch(archive.url)
+                            if (!response.ok) throw new Error('Archive download failed or access expired.')
+                            const bytes = await response.arrayBuffer()
+                            if (archive.checksum) {
+                              const digest = await crypto.subtle.digest('SHA-256', bytes)
+                              const checksum = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')
+                              if (checksum !== archive.checksum) throw new Error('Archive integrity check failed. Do not use this file.')
+                            }
+                            const url = URL.createObjectURL(new Blob([bytes], { type: 'application/gzip' }))
+                            const link = document.createElement('a'); link.href = url; link.download = archive.filename; link.click()
+                            window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+                          } catch (error) { toast.error('Download failed', error instanceof Error ? error.message : 'Please try again.') }
+                          finally { setDownloadingBackup(null) }
+                        }}>Download</Button> : <span className="text-xs text-ink-500">{row.status === 'success' ? 'Legacy job: no archive verified' : 'Not available'}</span>}</Td>
                       </Tr>
                     ))}
                   </Tbody>

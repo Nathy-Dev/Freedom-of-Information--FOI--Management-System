@@ -1,10 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Download, FileText, History, Lock, ScanLine, ShieldCheck } from 'lucide-react'
 import type { FoiDocument } from '@/types'
 import { Badge, Button, ConfidentialityBadge, DocumentKindBadge, Drawer } from '@/components/ui'
 import { DescriptionList } from '@/components/common'
-import { useRecordDocumentAccess } from '@/api/documents'
+import { useDocumentFile } from '@/api/documents'
 import { OCR_LABELS, VIRUS_SCAN_LABELS } from '@/lib/constants'
 import { formatBytes, formatDate, formatDateTime } from '@/lib/format'
 import { useToast } from '@/store/ToastContext'
@@ -19,22 +19,39 @@ export interface DocumentPreviewDrawerProps {
 /** FR-031: preview the live file URL and record access against the signed-in user. */
 export function DocumentPreviewDrawer({ document, onClose, canDownload = false }: DocumentPreviewDrawerProps) {
   const { cases, usersById } = useData()
-  const recordAccess = useRecordDocumentAccess()
+  const getFile = useDocumentFile()
   const toast = useToast()
+  const [fileUrl, setFileUrl] = useState<string | null>(null)
+  const [fileError, setFileError] = useState('')
+  const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
-    if (document) void recordAccess(document.id, 'view')
-  }, [document, recordAccess])
+    let cancelled = false
+    setFileUrl(null)
+    setFileError('')
+    if (document && ['pdf', 'png', 'jpg', 'jpeg'].includes(document.fileType.toLowerCase())) {
+      void getFile(document.id, true).then((file) => { if (!cancelled) setFileUrl(file.url) }).catch((error) => { if (!cancelled) setFileError(error instanceof Error ? error.message : 'Preview unavailable.') })
+    }
+    return () => { cancelled = true }
+  }, [document?.id, document?.version, document?.virusScan, getFile])
 
   if (!document) return null
 
   const foiCase = cases.find((item) => item.id === document.caseId)
   const uploadedBy = usersById.get(document.uploadedBy)?.name ?? document.uploadedBy
 
-  const download = () => {
-    void recordAccess(document.id, 'download')
-    if (document.url) window.open(document.url, '_blank', 'noopener,noreferrer')
-    toast.info('Download recorded', `${document.fileName} written to the access log.`)
+  const download = async () => {
+    setDownloading(true)
+    try {
+      const file = await getFile(document.id)
+      const response = await fetch(file.url)
+      if (!response.ok) throw new Error('Download failed or access expired.')
+      const url = URL.createObjectURL(await response.blob())
+      const link = globalThis.document.createElement('a'); link.href = url; link.download = file.filename; link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast.success('Download ready', 'The file was downloaded and access was recorded.')
+    } catch (error) { toast.error('Download failed', error instanceof Error ? error.message : 'Please try again.') }
+    finally { setDownloading(false) }
   }
 
   return (
@@ -44,7 +61,7 @@ export function DocumentPreviewDrawer({ document, onClose, canDownload = false }
       width="lg"
       title={<span className="flex items-center gap-2"><FileText className="h-4 w-4 text-brand-600" /><span className="truncate">{document.fileName}</span></span>}
       description={`${formatBytes(document.fileSize)} · ${document.fileType.toUpperCase()} · version ${document.version}`}
-      footer={<div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Close</Button>{canDownload ? <Button onClick={download} leadingIcon={<Download className="h-4 w-4" />}>Download</Button> : <Button variant="outline" disabled leadingIcon={<Lock className="h-4 w-4" />}>Download restricted</Button>}</div>}
+      footer={<div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Close</Button>{canDownload ? <Button onClick={download} isLoading={downloading} leadingIcon={<Download className="h-4 w-4" />}>Download</Button> : <Button variant="outline" disabled leadingIcon={<Lock className="h-4 w-4" />}>Download restricted</Button>}</div>}
     >
       <div className="space-y-5">
         <div className="flex flex-wrap items-center gap-2">
@@ -60,14 +77,14 @@ export function DocumentPreviewDrawer({ document, onClose, canDownload = false }
             <span className="inline-flex items-center gap-1"><ScanLine className="h-3.5 w-3.5" />{OCR_LABELS[document.ocr]}</span>
           </div>
           <div className="bg-white p-3">
-            {document.url && document.fileType.toLowerCase().includes('pdf') ? (
-              <iframe title={`Preview of ${document.fileName}`} src={document.url} className="h-[32rem] w-full" />
-            ) : document.url && document.fileType.toLowerCase().startsWith('image/') ? (
-              <img src={document.url} alt={document.fileName} className="mx-auto max-h-[32rem] max-w-full object-contain" />
-            ) : document.url ? (
-              <a href={document.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-brand-700 hover:underline">Open the stored file in a new tab</a>
+            {fileUrl && document.fileType.toLowerCase().includes('pdf') ? (
+              <iframe title={`Preview of ${document.fileName}`} src={fileUrl} sandbox="allow-same-origin" referrerPolicy="no-referrer" className="h-[32rem] w-full" />
+            ) : fileUrl && ['png', 'jpg', 'jpeg'].includes(document.fileType.toLowerCase()) ? (
+              <img src={fileUrl} alt={document.fileName} className="mx-auto max-h-[32rem] max-w-full object-contain" />
+            ) : fileUrl ? (
+              <a href={fileUrl} target="_blank" rel="noreferrer" className="text-sm font-medium text-brand-700 hover:underline">Open the stored file in a new tab</a>
             ) : (
-              <p className="text-sm text-ink-500">A preview URL is not available for this file.</p>
+              <p className="text-sm text-ink-500">{fileError || 'Use Download for office files, or reopen this preview after its link expires.'}</p>
             )}
             {document.isRedacted ? <p className="pt-2 text-[11px] italic text-ink-500">Redactions are applied to the stored disclosure version and recorded in the redaction schedule.</p> : null}
           </div>

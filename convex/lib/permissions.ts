@@ -297,13 +297,13 @@ export function canSeeCase(
   }
 }
 
-export function visibleCases(
+export function visibleCases<CaseRow extends CaseScopedRow>(
   roleId: RoleId | string,
   userId: string,
-  cases: CaseScopedRow[],
+  cases: CaseRow[],
   teamMemberIds: string[] = [],
   userTeamId?: string | null,
-): CaseScopedRow[] {
+): CaseRow[] {
   const scope = caseVisibility(roleId);
   if (scope === "all") return cases;
   if (scope === "none") return [];

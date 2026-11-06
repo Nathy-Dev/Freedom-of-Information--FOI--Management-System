@@ -35,6 +35,8 @@ export const commit = mutation({
   },
   handler: async (ctx, args) => {
     const actor = await requirePermission(ctx, "import:bulk");
+    const settings = await ctx.db.query("systemSettings").first();
+    if (args.rows.length > 200) throw new Error("Import at most 200 rows at a time.");
     const rows = args.rows as ImportRow[];
     const now = new Date();
     const iso = now.toISOString();
@@ -114,7 +116,7 @@ export const commit = mutation({
           tags: row.tags ? row.tags.split(";").map((t) => t.trim()).filter(Boolean) : [],
           department: row.department || "Legal Unit",
           dateSubmitted,
-          statutoryDueDate: addWorkingDays(new Date(dateSubmitted), 7),
+          statutoryDueDate: addWorkingDays(new Date(dateSubmitted), settings?.statutoryResponseDays ?? 7),
           dateClosed: undefined,
           closureReason: undefined,
           outcomeCode: undefined,

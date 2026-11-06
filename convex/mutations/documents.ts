@@ -16,6 +16,7 @@ import { requirePermission, forbiddenError } from "../lib/session";
 import { visibleCases } from "../lib/permissions";
 import { writeAudit, writeAccessLog } from "../lib/audit";
 import { pushNotification } from "../lib/notifications";
+import { canReadDocument } from "../lib/documentAccess";
 
 async function assertCaseAccess(
   ctx: MutationCtx,
@@ -69,6 +70,10 @@ export const completeUpload = mutation({
 
     const now = new Date().toISOString();
     const fileType = args.fileName.split(".").pop()?.toLowerCase() ?? "pdf";
+    const stored = await ctx.db.system.get(args.storageId);
+    if (!stored || stored.size !== args.fileSize || stored.size < 1 || stored.size > 50 * 1024 * 1024) throw forbiddenError("Upload a file between 1 byte and 50 MB.");
+    if (!["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg", "msg", "eml", "txt", "csv"].includes(fileType)) throw forbiddenError("Unsupported file type.");
+    if (args.isPublic) throw forbiddenError("Files must be checked and published separately after upload.");
 
     // Same filename on the same case = new version (FR-015).
     const existing = await ctx.db
@@ -84,6 +89,12 @@ export const completeUpload = mutation({
         uploadedBy: actor._id,
         storageId: args.storageId,
         version: newVersion,
+        isPublic: false,
+        isRedacted: false,
+        redactionVerified: false,
+        redactionCount: 0,
+        text: undefined,
+        embedding: undefined,
         createdAt: now,
         virusScan: "pending",
         ocr: OCR_FILE_TYPES.has(fileType) ? "queued" : "not_required",
@@ -178,16 +189,33 @@ export const redact = mutation({
     documentId: v.id("documents"),
     redactionCount: v.number(),
     grounds: v.string(),
+    storageId: v.id("_storage"),
+    fileSize: v.number(),
+    confirmedPermanentRemoval: v.boolean(),
   },
   handler: async (ctx, args) => {
     const actor = await requirePermission(ctx, "document:redact");
     const doc = await ctx.db.get("documents", args.documentId);
     if (!doc) throw forbiddenError("Document not found.");
     await assertCaseAccess(ctx, actor, doc.caseId);
+    const stored = await ctx.db.system.get(args.storageId);
+    if (!args.confirmedPermanentRemoval || !Number.isInteger(args.redactionCount) || args.redactionCount < 1 || args.grounds.trim().length < 5) throw forbiddenError("Confirm the permanent removal of sensitive content and state the legal grounds.");
+    if (!stored || stored.contentType !== "application/pdf" || stored.size !== args.fileSize || stored.size < 1 || stored.size > 50 * 1024 * 1024 || args.storageId === doc.storageId) throw forbiddenError("Upload a separate, permanently edited disclosure PDF (maximum 50 MB).");
 
     const now = new Date().toISOString();
     await ctx.db.patch("documents", args.documentId, {
       isRedacted: true,
+      redactionVerified: true,
+      storageId: args.storageId,
+      fileSize: args.fileSize,
+      fileType: "pdf",
+      fileName: doc.fileName.replace(/\.[^.]+$/, "") + ".pdf",
+      virusScan: "pending",
+      checksum: "",
+      ocr: "queued",
+      text: undefined,
+      embedding: undefined,
+      isPublic: false,
       redactionCount: args.redactionCount,
       version: doc.version + 1,
       updatedAt: now,
@@ -197,8 +225,10 @@ export const redact = mutation({
       version: doc.version + 1,
       uploadedBy: actor._id,
       createdAt: now,
-      fileSize: doc.fileSize,
-      checksum: doc.checksum,
+      fileSize: args.fileSize,
+      checksum: "",
+      storageId: args.storageId,
+      virusScan: "pending",
       changeNote: `Redactions applied — ${args.grounds}`,
     });
     await ctx.db.insert("timeline", {
@@ -217,7 +247,23 @@ export const redact = mutation({
       performedBy: actor._id,
       details: `${args.redactionCount} severances applied. Grounds: ${args.grounds}`,
     });
+    await enqueuePipeline(ctx, args.documentId);
     return ctx.db.get("documents", args.documentId);
+  },
+});
+
+export const setLegalHold = mutation({
+  args: { documentId: v.id("documents"), enabled: v.boolean(), reason: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requirePermission(ctx, "document:retention");
+    const document = await ctx.db.get(args.documentId);
+    if (!document) throw forbiddenError("Document not found.");
+    await assertCaseAccess(ctx, actor, document.caseId);
+    if (args.reason.trim().length < 10 || args.reason.length > 1000) throw forbiddenError("Give a reason between 10 and 1,000 characters.");
+    await ctx.db.patch(document._id, { legalHold: args.enabled, updatedAt: new Date().toISOString() });
+    await writeAudit(ctx, { entityType: "Document", entityId: document._id, entityLabel: document.fileName, action: "update", performedBy: actor._id, details: `Legal hold ${args.enabled ? "placed" : "released"}: ${args.reason.trim()}` });
+    return null;
   },
 });
 
@@ -229,6 +275,8 @@ export const publish = mutation({
     const doc = await ctx.db.get("documents", args.documentId);
     if (!doc) throw forbiddenError("Document not found.");
     await assertCaseAccess(ctx, actor, doc.caseId);
+    if (doc.virusScan !== "clean") throw forbiddenError("The file must pass a virus scan before release.");
+    if (doc.isRedacted && doc.redactionVerified !== true) throw forbiddenError("Upload an approved disclosure copy before publishing this redacted record.");
 
     const now = new Date().toISOString();
     await ctx.db.patch("documents", args.documentId, { isPublic: true, updatedAt: now });
@@ -297,6 +345,7 @@ export const recordAccess = mutation({
     const doc = await ctx.db.get("documents", args.documentId);
     if (!doc) return null;
     const c = await assertCaseAccess(ctx, actor, doc.caseId);
+    if (!canReadDocument(actor, doc)) throw forbiddenError("This document has not been released to you.");
     await writeAccessLog(ctx, {
       documentId: args.documentId,
       documentName: doc.fileName,

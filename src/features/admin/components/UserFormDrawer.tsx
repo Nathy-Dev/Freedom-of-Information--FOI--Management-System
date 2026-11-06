@@ -81,7 +81,7 @@ export function UserFormDrawer({
             department: user.department ?? '',
             phone: user.phone ?? '',
             status: user.status,
-            mfaEnabled: user.mfaEnabled,
+            mfaEnabled: user.mfaRequired ?? false,
           }
         : BLANK,
     )
@@ -129,7 +129,7 @@ export function UserFormDrawer({
             mfaEnabled: form.mfaEnabled,
           },
         )
-        toast.success('Invitation sent', `${form.name.trim()} will receive an enrolment link by email.`)
+        toast.success('Invitation queued', `Delivery for ${form.name.trim()} will be attempted. Check the invitation status before assuming it was sent.`)
       }
       onSaved()
     } finally {

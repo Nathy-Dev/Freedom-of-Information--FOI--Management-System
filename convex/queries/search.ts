@@ -8,7 +8,8 @@
 import { query } from "../_generated/server";
 import { v } from "convex/values";
 import { requireUser } from "../lib/session";
-import { visibleCases } from "../lib/permissions";
+import { visibleCases, hasPermission } from "../lib/permissions";
+import { canReadDocument } from "../lib/documentAccess";
 
 export const globalSearch = query({
   args: {
@@ -79,7 +80,7 @@ export const globalSearch = query({
 
     // Documents (scoped by case visibility).
     const docs = await ctx.db.query("documents").withIndex("by_kind").take(2000);
-    const docByCase = new Map(docs.filter((d) => caseIds.has(d.caseId)).map((d) => [d._id, d]));
+    const docByCase = new Map(docs.filter((document) => caseIds.has(document.caseId) && canReadDocument(user, document)).map((document) => [document._id, document]));
     for (const d of docByCase.values()) {
       const inName = d.fileName.toLowerCase().includes(needle);
       // OCR-extracted text makes scanned documents searchable (FR-040).
@@ -101,7 +102,7 @@ export const globalSearch = query({
       const notes = await ctx.db.query("notes").withIndex("by_user").take(2000);
       for (const n of notes) {
         if (!caseIds.has(n.caseId)) continue;
-        if (n.type === "internal" && user.roleId === "auditor") continue;
+        if (n.type === "internal" && user.roleId === "external") continue;
         if (!n.content.toLowerCase().includes(needle)) continue;
         hits.push({
           id: n._id,
@@ -135,7 +136,7 @@ export const globalSearch = query({
     }
 
     // Users (staff only).
-    if (!isRequestor && user.roleId !== "auditor") {
+    if (!isRequestor && hasPermission(user.roleId, "user:read")) {
       const users = await ctx.db.query("users").withIndex("by_status").take(1000);
       for (const u of users) {
         const haystack = `${u.name} ${u.email} ${u.organization} ${u.position ?? ""}`.toLowerCase();

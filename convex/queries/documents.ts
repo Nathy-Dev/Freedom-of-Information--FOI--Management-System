@@ -7,6 +7,7 @@ import { query } from "../_generated/server";
 import { v } from "convex/values";
 import { requirePermission, forbiddenError } from "../lib/session";
 import { visibleCases } from "../lib/permissions";
+import { canReadDocument, documentForReader } from "../lib/documentAccess";
 
 export const list = query({
   args: {
@@ -37,6 +38,7 @@ export const list = query({
 
     const rows = docs.filter((d) => {
       if (!caseIds.has(d.caseId)) return false;
+      if (!canReadDocument(user, d)) return false;
       if (args.caseId && d.caseId !== args.caseId) return false;
       if (args.kinds?.length && !args.kinds.includes(d.kind)) return false;
       if (args.redactedOnly && !d.isRedacted) return false;
@@ -49,10 +51,7 @@ export const list = query({
     const safePage = Math.min(page, pageCount);
     const pageRows = rows.slice((safePage - 1) * pageSize, safePage * pageSize);
 
-    const rowsWithUrls = await Promise.all(pageRows.map(async (doc) => ({
-      ...doc,
-      url: await ctx.storage.getUrl(doc.storageId),
-    })));
+    const rowsWithUrls = await Promise.all(pageRows.map((doc) => documentForReader(ctx, user, doc)));
     return { rows: rowsWithUrls, total, page: safePage, pageSize, pageCount };
   },
 });
@@ -74,6 +73,21 @@ export const get = query({
       .withIndex("by_document", (q) => q.eq("documentId", args.id))
       .take(100);
 
-    return { ...doc, url: await ctx.storage.getUrl(doc.storageId), versions };
+    return { ...await documentForReader(ctx, user, doc), versions: user.roleId === "requestor" ? [] : versions.map((version) => ({ ...version, storageId: null })) };
+  },
+});
+
+export const versionFile = query({
+  args: { id: v.id("documents"), version: v.number() },
+  returns: v.object({ url: v.union(v.string(), v.null()) }),
+  handler: async (ctx, args) => {
+    const user = await requirePermission(ctx, "document:read");
+    const document = await ctx.db.get(args.id);
+    if (!document) return { url: null };
+    const foiCase = await ctx.db.get(document.caseId);
+    if (!foiCase || !visibleCases(user.roleId, user._id, [foiCase], [], user.teamId).length) throw forbiddenError();
+    if (!canReadDocument(user, document) || (user.roleId === "requestor" && args.version !== document.version)) throw forbiddenError();
+    if (args.version === document.version) return { url: null };
+    return { url: null };
   },
 });

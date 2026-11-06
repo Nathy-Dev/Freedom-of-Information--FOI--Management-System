@@ -51,6 +51,10 @@ export default defineSchema({
     avatarColor: v.string(),
     initials: v.string(),
     mfaEnabled: v.boolean(),
+    failedLoginAttempts: v.optional(v.number()),
+    mfaRequired: v.optional(v.boolean()),
+    passwordChangedAt: v.optional(v.string()),
+    invitationStatus: v.optional(v.union(v.literal("pending"), v.literal("sent"), v.literal("failed"), v.literal("blocked"))),
     lastLoginAt: v.optional(v.string()),
     createdAt: v.string(),
     updatedAt: v.string(),
@@ -70,6 +74,24 @@ export default defineSchema({
     permissions: v.array(v.string()),
     isSystem: v.boolean(),
   }),
+
+  userSessions: defineTable({
+    authSessionId: v.string(),
+    authUserId: v.string(),
+    lastSeenAt: v.number(),
+    secondFactorVerifiedAt: v.optional(v.number()),
+    secondFactorAttempts: v.optional(v.number()),
+  }).index("by_session", ["authSessionId"]).index("by_last_seen", ["lastSeenAt"]),
+
+  invitations: defineTable({
+    userId: v.id("users"),
+    token: v.string(),
+    expiresAt: v.number(),
+    attempts: v.number(),
+    status: v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed"), v.literal("blocked")),
+    leaseUntil: v.optional(v.number()),
+    error: v.optional(v.string()),
+  }).index("by_user", ["userId"]),
 
   requestors: defineTable({
     userId: v.optional(v.id("users")),
@@ -247,6 +269,7 @@ export default defineSchema({
       v.literal("restricted"),
     ),
     isRedacted: v.boolean(),
+    redactionVerified: v.optional(v.boolean()),
     redactionCount: v.number(),
     virusScan: v.union(v.literal("pending"), v.literal("clean"), v.literal("infected"), v.literal("skipped")),
     ocr: v.union(
@@ -258,6 +281,8 @@ export default defineSchema({
     ),
     retentionLabel: v.string(),
     retainUntil: v.string(),
+    retentionReviewAt: v.optional(v.string()),
+    legalHold: v.optional(v.boolean()),
     text: v.optional(v.string()),
     embedding: v.optional(v.array(v.float64())),
     createdAt: v.string(),
@@ -266,6 +291,7 @@ export default defineSchema({
     .index("by_case", ["caseId"])
     .index("by_kind", ["kind"])
     .index("by_retention", ["retainUntil"])
+    .index("by_virus_scan", ["virusScan"])
     .index("by_uploaded_by", ["uploadedBy"])
     .searchIndex("search_documents", {
       searchField: "fileName",
@@ -286,6 +312,7 @@ export default defineSchema({
     checksum: v.string(),
     changeNote: v.optional(v.string()),
     storageId: v.optional(v.id("_storage")),
+    virusScan: v.optional(v.union(v.literal("pending"), v.literal("clean"), v.literal("infected"), v.literal("skipped"))),
   })
     .index("by_document", ["documentId"]),
 
@@ -440,7 +467,20 @@ export default defineSchema({
     email: v.boolean(),
     sms: v.boolean(),
   })
-    .index("by_user", ["userId"]),
+    .index("by_user", ["userId"])
+    .index("by_user_kind", ["userId", "kind"]),
+
+  notificationDeliveries: defineTable({
+    notificationId: v.id("notifications"),
+    channel: v.union(v.literal("email"), v.literal("sms")),
+    status: v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed"), v.literal("blocked")),
+    attempts: v.number(),
+    nextAttemptAt: v.number(),
+    leaseUntil: v.optional(v.number()),
+    providerId: v.optional(v.string()),
+    error: v.optional(v.string()),
+    sentAt: v.optional(v.string()),
+  }).index("by_status_due", ["status", "nextAttemptAt"]),
 
   /* ------------------------------------------------------------------ *
    * Audit & access logs (append-only)
@@ -560,7 +600,7 @@ export default defineSchema({
     lastRun: v.optional(v.string()),
     nextRun: v.optional(v.string()),
     createdAt: v.string(),
-  }),
+  }).index("by_creator", ["creatorId"]).index("by_next_run", ["nextRun"]),
 
   reportRuns: defineTable({
     reportId: v.id("reports"),
@@ -569,7 +609,9 @@ export default defineSchema({
     status: v.union(v.literal("running"), v.literal("success"), v.literal("failed")),
     storageId: v.optional(v.id("_storage")),
     error: v.optional(v.string()),
-  }),
+    attempts: v.optional(v.number()),
+    leaseUntil: v.optional(v.number()),
+  }).index("by_report", ["reportId"]),
 
   views: defineTable({
     name: v.string(),
@@ -625,6 +667,19 @@ export default defineSchema({
   })
     .index("by_client_id", ["clientId"]),
 
+  fileTickets: defineTable({
+    token: v.string(),
+    storageId: v.id("_storage"),
+    userId: v.id("users"),
+    authSessionId: v.string(),
+    permission: v.union(v.literal("system:backup"), v.literal("system:export"), v.literal("report:export"), v.literal("document:read"), v.literal("document:download")),
+    documentId: v.optional(v.id("documents")),
+    version: v.optional(v.number()),
+    inline: v.optional(v.boolean()),
+    filename: v.string(),
+    expiresAt: v.number(),
+  }).index("by_token", ["token"]),
+
   backups: defineTable({
     startedAt: v.string(),
     type: v.union(v.literal("full"), v.literal("incremental")),
@@ -632,6 +687,10 @@ export default defineSchema({
     status: v.union(v.literal("success"), v.literal("running"), v.literal("failed")),
     target: v.string(),
     restoreTested: v.boolean(),
+    storageId: v.optional(v.id('_storage')),
+    checksum: v.optional(v.string()),
+    completedAt: v.optional(v.string()),
+    error: v.optional(v.string()),
   }),
 
   importBatches: defineTable({
@@ -658,4 +717,9 @@ export default defineSchema({
     key: v.string(),
     value: v.number(),
   }).index("by_key", ["key"]),
+
+  maintenanceCursors: defineTable({
+    job: v.string(),
+    cursor: v.union(v.string(), v.null()),
+  }).index("by_job", ["job"]),
 });

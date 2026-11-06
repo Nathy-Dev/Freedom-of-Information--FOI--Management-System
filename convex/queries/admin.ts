@@ -4,7 +4,8 @@
 
 import { query } from "../_generated/server";
 import { v } from "convex/values";
-import { requirePermission, getCurrentUser } from "../lib/session";
+import { requirePermission, getCurrentUser, sessionSecurityRequirement } from "../lib/session";
+import { entraConfigured } from "../lib/entraSettings";
 
 export const listUsers = query({
   args: {
@@ -54,7 +55,8 @@ export const roles = query({
 export const reference = query({
   args: {},
   handler: async (ctx) => {
-    if (!(await getCurrentUser(ctx))) return null;
+    const currentUser = await getCurrentUser(ctx);
+    if (!currentUser || currentUser.status !== "active" || await sessionSecurityRequirement(ctx, currentUser)) return null;
     const [departments, courts, legalTeams, tags, outcomeCodes, closureReasons, retentionLabels, users] =
       await Promise.all([
         ctx.db.query("departments").take(500),
@@ -64,7 +66,7 @@ export const reference = query({
         ctx.db.query("taxonomyTerms").withIndex("by_kind", (q) => q.eq("kind", "outcome_code")).take(500),
         ctx.db.query("taxonomyTerms").withIndex("by_kind", (q) => q.eq("kind", "closure_reason")).take(500),
         ctx.db.query("taxonomyTerms").withIndex("by_kind", (q) => q.eq("kind", "retention_label")).take(500),
-        ctx.db.query("users").take(500),
+        currentUser.roleId === "requestor" || currentUser.roleId === "external" ? Promise.resolve([]) : ctx.db.query("users").withIndex("by_status", (query) => query.eq("status", "active")).take(500),
       ]);
     const assignableStaff = users.filter(
       (user) => (user.roleId === "legal" || user.roleId === "admin") && user.status === "active",
@@ -92,6 +94,8 @@ export const publicSettings = query({
       passwordMinLength: doc.passwordMinLength,
       passwordRotationDays: doc.passwordRotationDays,
       selfRegistrationEnabled: doc.selfRegistrationEnabled,
+      sessionTimeoutMinutes: doc.sessionTimeoutMinutes,
+      ssoEnabled: doc.ssoEnabled && entraConfigured(process.env),
     };
   },
 });

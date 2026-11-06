@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { AlertCircle, Eye, EyeOff, KeyRound, Lock, Mail, ShieldCheck } from 'lucide-react'
+import { AlertCircle, Eye, EyeOff, KeyRound, Lock, Mail } from 'lucide-react'
 import { Button, Checkbox, Input } from '@/components/ui'
 import { useAuth } from '@/store/AuthContext'
 import { usePublicSettings } from '@/api/directory'
@@ -175,35 +175,17 @@ export function LoginPage() {
         </Button>
       </form>
 
-      <div className="my-7 flex items-center gap-3">
-        <span className="h-px flex-1 bg-ink-200" />
-        <span className="font-mono text-2xs uppercase tracking-[0.2em] text-ink-400">or</span>
-        <span className="h-px flex-1 bg-ink-200" />
-      </div>
-
-      {/* Federated sign-in named for what it is, rather than left as a bare button. */}
-      <div className="rounded-xl border border-ink-200 bg-ink-50/70 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-ink-900">Staff single sign-on</p>
-            <p className="mt-1 text-xs leading-relaxed text-ink-500">
-              Federated through the Federal Ministry of Environment tenant. Privileged roles are
-              challenged for a second factor on every session.
-            </p>
-          </div>
-          <ShieldCheck aria-hidden className="mt-0.5 h-4.5 w-4.5 shrink-0 text-brand-600" />
+      {settings?.ssoEnabled ? (
+        <div className="mt-7 rounded-xl border border-ink-200 bg-ink-50/70 p-4">
+          <p className="text-sm font-semibold text-ink-900">Staff single sign-on</p>
+          <p className="mt-1 text-xs leading-relaxed text-ink-500">
+            Use your linked Microsoft staff account. First activate your invitation and link Microsoft in My Profile. An enrolled authenticator must also verify this session.
+          </p>
+          <Button type="button" variant="outline" fullWidth isLoading={busy === 'sso'} onClick={submitSso} className="mt-3.5 bg-white">
+            Continue with Microsoft Entra ID
+          </Button>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          fullWidth
-          isLoading={busy === 'sso'}
-          onClick={submitSso}
-          className="mt-3.5 bg-white"
-        >
-          Continue with Microsoft Entra ID
-        </Button>
-      </div>
+      ) : null}
 
       {settings?.selfRegistrationEnabled ? (
         <p className="mt-6 text-sm leading-relaxed text-ink-600">

@@ -10,6 +10,7 @@ import { requirePermission, requireUser, forbiddenError } from "../lib/session";
 import { visibleCases } from "../lib/permissions";
 import { applyCaseFilters, type CaseFilters } from "../lib/cases";
 import { computeSla } from "../lib/sla";
+import { canReadDocument, documentForReader } from "../lib/documentAccess";
 
 const caseFiltersValidator = v.object({
   q: v.optional(v.string()),
@@ -109,15 +110,12 @@ export const getBundle = query({
     const sla = computeSla(c);
     return {
       foiCase: { ...c, sla },
-      documents: await Promise.all(documents.map(async (doc) => ({
-        ...doc,
-        url: await ctx.storage.getUrl(doc.storageId),
-      }))),
+      documents: await Promise.all(documents.filter((doc) => canReadDocument(user, doc)).map((doc) => documentForReader(ctx, user, doc))),
       notes: visibleNotes,
-      tasks,
+      tasks: canReadInternal ? tasks : [],
       courtDates,
-      timeline,
-      linked,
+      timeline: canReadInternal ? timeline : timeline.filter((entry) => ["case_created", "document_published", "status_changed"].includes(entry.kind)).map((entry) => ({ ...entry, detail: undefined })),
+      linked: visibleCases(user.roleId, user._id, linked, [], user.teamId),
     };
   },
 });

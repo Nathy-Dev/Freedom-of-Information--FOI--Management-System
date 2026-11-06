@@ -45,6 +45,7 @@ export async function sendSms(input: {
         type: "plain",
         channel: input.channel ?? "generic",
       }),
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!res.ok) {
@@ -53,7 +54,8 @@ export async function sendSms(input: {
     }
 
     const body = (await res.json()) as { message_id?: string };
-    return { messageId: body.message_id ?? null, skipped: false };
+    if (!body.message_id) throw new Error("The SMS provider did not confirm acceptance.");
+    return { messageId: body.message_id, skipped: false };
   } catch (e) {
     console.error("[sms] Termii delivery failed:", e);
     throw e;

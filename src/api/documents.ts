@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from 'convex/react'
+import { useCallback } from 'react'
 import { api } from '../../convex/_generated/api'
 import type { Confidentiality, DocumentKind, FoiDocument } from '@/types'
 import { mapDocument } from './transform'
@@ -78,7 +79,15 @@ export function useUploadDocument() {
 
 export function useRedactDocument() {
   const mutate = useMutation(api.mutations.documents.redact)
-  return (documentId: string, redactionCount: number, grounds: string) => mutate({ documentId: documentId as never, redactionCount, grounds })
+  const generate = useGenerateUploadUrl()
+  return async (documentId: string, redactionCount: number, grounds: string, file: File, confirmedPermanentRemoval: boolean) => {
+    if (file.type !== 'application/pdf' || file.size < 1 || file.size > 50 * 1024 * 1024) throw new Error('Choose a disclosure PDF smaller than 50 MB.')
+    const uploadUrl = await generate({})
+    const response = await fetch(uploadUrl, { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: file })
+    if (!response.ok) throw new Error('The disclosure file could not be uploaded.')
+    const result = await response.json() as { storageId: string }
+    return mutate({ documentId: documentId as never, redactionCount, grounds, storageId: result.storageId as never, fileSize: file.size, confirmedPermanentRemoval })
+  }
 }
 
 export function usePublishDocument() {
@@ -89,4 +98,9 @@ export function usePublishDocument() {
 export function useRecordDocumentAccess() {
   const mutate = useMutation(api.mutations.documents.recordAccess)
   return (documentId: string, action: 'view' | 'download' | 'print' | 'denied') => mutate({ documentId: documentId as never, action })
+}
+
+export function useDocumentFile() {
+  const mutate = useMutation(api.fileAccess.documentFile)
+  return useCallback((documentId: string, preview = false, version?: number) => mutate({ id: documentId as never, preview, version }), [mutate])
 }

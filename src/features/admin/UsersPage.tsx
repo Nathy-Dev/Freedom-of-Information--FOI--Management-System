@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { useMutation } from 'convex/react'
+import { api } from '../../../convex/_generated/api'
 import {
   KeyRound,
   Pencil,
@@ -77,6 +79,7 @@ export function UsersPage() {
   const setUserStatus = useSetUserStatus()
   const bulkSetUserStatus = useBulkSetUserStatus()
   const resetUserMfa = useResetUserMfa()
+  const resendInvitation = useMutation(api.mutations.admin.resendInvitation)
 
   const result = useUserDirectory({
     q: debounced || undefined,
@@ -340,6 +343,7 @@ export function UsersPage() {
                         <Badge tone={STATUS_TONES[row.status]} dot>
                           {STATUS_LABELS[row.status]}
                         </Badge>
+                        {row.status === 'invited' ? <div className="mt-1 text-xs">Email: {row.invitationStatus ?? 'Not queued'}{canWrite ? <Button size="sm" variant="ghost" onClick={() => void resendInvitation({ id: row.id as never }).then(() => toast.success('Invitation queued', 'Delivery will be attempted again.')).catch((error: Error) => toast.error('Invitation failed', error.message))}>Resend</Button> : null}</div> : null}
                       </Td>
                       <Td>
                         {row.mfaEnabled ? (

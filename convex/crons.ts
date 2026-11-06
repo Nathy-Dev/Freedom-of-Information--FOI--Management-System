@@ -21,8 +21,9 @@ import { internal } from "./_generated/api";
 const crons = cronJobs();
 
 crons.interval("SLA monitor", { hours: 1 }, internal.scheduled.slaMonitor, {});
+crons.interval("Notification delivery retry", { minutes: 15 }, internal.internal.notificationDb.retry, {});
 crons.interval("Court reminders", { hours: 24 }, internal.scheduled.courtReminders, {});
-crons.interval("Scheduled reports", { hours: 24 }, internal.scheduled.reportDelivery, {});
+crons.daily("Scheduled reports", { hourUTC: 5, minuteUTC: 0 }, internal.scheduled.reportDelivery, {});
 crons.interval("Retention", { hours: 24 }, internal.scheduled.retention, {});
 crons.interval("Session cleanup", { hours: 24 }, internal.scheduled.sessionCleanup, {});
 crons.interval("Webhook retry", { minutes: 15 }, internal.actions.webhooks.deliver, {

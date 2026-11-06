@@ -7,15 +7,17 @@
 
 import { action } from "../_generated/server";
 import { v } from "convex/values";
-import { internal } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { getCurrentIdentity } from "../lib/session";
 import type { Id } from "../_generated/dataModel";
+
 
 export const exportData = action({
   args: {
     scope: v.union(v.literal("cases"), v.literal("documents"), v.literal("users"), v.literal("audit"), v.literal("court_dates")),
   },
-  handler: async (ctx, args) => {
+  returns: v.object({ fileName: v.string(), url: v.string(), storageId: v.id("_storage") }),
+  handler: async (ctx, args): Promise<{ fileName: string; url: string; storageId: Id<"_storage"> }> => {
     // Permission check via the caller's identity (actions cannot call requirePermission directly).
     const identity = await getCurrentIdentity(ctx);
     if (!identity) throw new Error("Unauthenticated");
@@ -27,6 +29,8 @@ export const exportData = action({
     if (!user || (user.roleId !== "super_admin" && user.roleId !== "admin" && user.roleId !== "auditor")) {
       throw new Error("Forbidden: requires export permission.");
     }
+
+    const access = await ctx.runQuery(api.fileAccess.exportAccess, { permission: "system:export" });
 
     // Pull the scoped rows and build CSV.
     let csv = "";
@@ -114,7 +118,8 @@ export const exportData = action({
 
     // Upload CSV to storage, get a signed URL.
     const storageId = await ctx.storage.store(new Blob([csv], { type: "text/csv" }));
-    const url = await ctx.storage.getUrl(storageId);
+    await ctx.scheduler.runAfter(600000, internal.internal.exportDb.removeExport, { storageId });
+    const url = await ctx.runMutation(internal.fileAccess.createTicket, { ...access, storageId, permission: "system:export", filename: fileName, token: crypto.randomUUID() });
 
     // Audit the export.
     if (user) {

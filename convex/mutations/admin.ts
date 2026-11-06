@@ -8,6 +8,24 @@ import { requirePermission, requireAdmin, forbiddenError } from "../lib/session"
 import { writeAudit } from "../lib/audit";
 import { sha256Hex, randomSecret } from "../lib/crypto";
 import { initialsOf } from "../lib/ids";
+import { reportFiltersValidator } from "../lib/reportData";
+import { internal } from "../_generated/api";
+import { components } from "../_generated/api";
+import type { MutationCtx } from "../_generated/server";
+import type { Doc, Id } from "../_generated/dataModel";
+import { roleId, userStatus } from "../schema";
+import { nextReportRun } from "../lib/reportSchedule";
+
+async function protectLastAdministrator(ctx: MutationCtx, userId: Id<"users">) {
+  const administrators = await ctx.db.query("users").withIndex("by_role", (query) => query.eq("roleId", "super_admin")).take(1000);
+  if (!administrators.some((user) => user._id !== userId && user.status === "active")) throw forbiddenError("Keep at least one active Super Administrator.");
+}
+
+async function checkStatusChange(ctx: MutationCtx, actor: Doc<"users">, user: Doc<"users">, status: string) {
+  if (user.roleId === "super_admin" && actor.roleId !== "super_admin") throw forbiddenError("Only a Super Administrator can change that account.");
+  if (user.roleId === "super_admin" && status !== "active") await protectLastAdministrator(ctx, user._id);
+  if (user.status === "invited" && status === "active") throw forbiddenError("The invited user must set their password before activation.");
+}
 
 /* ------------------------------------------------------------------ *
  * Users & roles
@@ -35,19 +53,21 @@ export const createUser = mutation({
   },
   handler: async (ctx, args) => {
     const actor = await requirePermission(ctx, "user:write");
+    if (args.roleId === "super_admin" && actor.roleId !== "super_admin") throw forbiddenError("Only a Super Administrator can create that role.");
+    if (args.name.trim().length < 3 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.email.trim())) throw forbiddenError("Enter a full name and valid email address.");
     const now = new Date().toISOString();
 
     // Prevent duplicate emails.
     const existing = await ctx.db
       .query("users")
-      .withIndex("by_email", (q) => q.eq("email", args.email.toLowerCase()))
+      .withIndex("by_email", (q) => q.eq("email", args.email.trim().toLowerCase()))
       .first();
     if (existing) throw forbiddenError("A user with this email already exists.");
 
     const userId = await ctx.db.insert("users", {
-      authUserId: args.email.toLowerCase(), // Placeholder; replaced when the auth user signs in.
+      authUserId: `invited:${args.email.trim().toLowerCase()}`,
       name: args.name,
-      email: args.email.toLowerCase(),
+      email: args.email.trim().toLowerCase(),
       roleId: args.roleId,
       phone: args.phone,
       organization: args.organization,
@@ -57,7 +77,9 @@ export const createUser = mutation({
       status: "invited",
       avatarColor: "bg-brand-600",
       initials: initialsOf(args.name),
-      mfaEnabled: args.mfaEnabled,
+      mfaEnabled: false,
+      mfaRequired: args.mfaEnabled,
+      invitationStatus: "pending",
       createdAt: now,
       updatedAt: now,
     });
@@ -71,6 +93,8 @@ export const createUser = mutation({
       details: `User invited with role ${args.roleId}.`,
     });
 
+    const invitationId = await ctx.db.insert("invitations", { userId, token: randomSecret(), expiresAt: Date.now() + 7 * 86400000, attempts: 0, status: "pending" });
+    await ctx.scheduler.runAfter(0, internal.accountActions.deliverInvitation, { invitationId });
     return ctx.db.get("users", userId);
   },
 });
@@ -80,12 +104,12 @@ export const updateUser = mutation({
     id: v.id("users"),
     patch: v.object({
       name: v.optional(v.string()),
-      roleId: v.optional(v.string()),
+      roleId: v.optional(roleId),
       organization: v.optional(v.string()),
       position: v.optional(v.string()),
       department: v.optional(v.string()),
       phone: v.optional(v.string()),
-      status: v.optional(v.string()),
+      status: v.optional(userStatus),
       mfaEnabled: v.optional(v.boolean()),
     }),
   },
@@ -93,6 +117,9 @@ export const updateUser = mutation({
     const actor = await requirePermission(ctx, "user:write");
     const user = await ctx.db.get("users", args.id);
     if (!user) throw forbiddenError("User not found.");
+    if (args.patch.status) await checkStatusChange(ctx, actor, user, args.patch.status);
+    if ((user.roleId === "super_admin" || args.patch.roleId === "super_admin") && actor.roleId !== "super_admin") throw forbiddenError("Only a Super Administrator can change that account.");
+    if (user.roleId === "super_admin" && ((args.patch.roleId && args.patch.roleId !== "super_admin") || (args.patch.status && args.patch.status !== "active"))) await protectLastAdministrator(ctx, user._id);
 
     const roleChanged = args.patch.roleId && args.patch.roleId !== user.roleId;
     const previousRole = user.roleId;
@@ -103,8 +130,11 @@ export const updateUser = mutation({
     if (args.patch.position) patch.position = args.patch.position;
     if (args.patch.department) patch.department = args.patch.department;
     if (args.patch.phone) patch.phone = args.patch.phone;
-    if (args.patch.status) patch.status = args.patch.status;
-    if (args.patch.mfaEnabled !== undefined) patch.mfaEnabled = args.patch.mfaEnabled;
+    if (args.patch.status) {
+      patch.status = args.patch.status;
+      if (args.patch.status === "active") patch.failedLoginAttempts = 0;
+    }
+    if (args.patch.mfaEnabled !== undefined) patch.mfaRequired = args.patch.mfaEnabled;
     await ctx.db.patch("users", args.id, patch);
 
     await writeAudit(ctx, {
@@ -131,7 +161,8 @@ export const setUserStatus = mutation({
     const actor = await requirePermission(ctx, "user:write");
     const user = await ctx.db.get("users", args.id);
     if (!user) throw forbiddenError("User not found.");
-    await ctx.db.patch("users", args.id, { status: args.status, updatedAt: new Date().toISOString() });
+    await checkStatusChange(ctx, actor, user, args.status);
+    await ctx.db.patch("users", args.id, { status: args.status, ...(args.status === "active" ? { failedLoginAttempts: 0 } : {}), updatedAt: new Date().toISOString() });
     await writeAudit(ctx, {
       entityType: "User",
       entityId: args.id,
@@ -150,6 +181,14 @@ export const resetUserMfa = mutation({
     const actor = await requirePermission(ctx, "user:write");
     const user = await ctx.db.get("users", args.id);
     if (!user) throw forbiddenError("User not found.");
+    if (actor.roleId !== "super_admin") throw forbiddenError("Only a Super Administrator can reset another user's authenticator.");
+    await ctx.runMutation(components.betterAuth.adapter.deleteMany, { input: { model: "twoFactor", where: [{ field: "userId", value: user.authUserId }] }, paginationOpts: { numItems: 100, cursor: null } });
+    await ctx.runMutation(components.betterAuth.adapter.updateOne, { input: { model: "user", where: [{ field: "_id", value: user.authUserId }], update: { twoFactorEnabled: false } } });
+    let cursor: string | null = null;
+    do {
+      const removed: { isDone: boolean; continueCursor: string } = await ctx.runMutation(components.betterAuth.adapter.deleteMany, { input: { model: "session", where: [{ field: "userId", value: user.authUserId }] }, paginationOpts: { numItems: 100, cursor } });
+      cursor = removed.isDone ? null : removed.continueCursor;
+    } while (cursor);
     await ctx.db.patch("users", args.id, { mfaEnabled: false, updatedAt: new Date().toISOString() });
     await writeAudit(ctx, {
       entityType: "User",
@@ -173,7 +212,8 @@ export const bulkSetUserStatus = mutation({
     for (const id of args.ids) {
       const user = await ctx.db.get("users", id);
       if (!user) continue;
-      await ctx.db.patch("users", id, { status: args.status, updatedAt: new Date().toISOString() });
+      await checkStatusChange(ctx, actor, user, args.status);
+      await ctx.db.patch("users", id, { status: args.status, ...(args.status === "active" ? { failedLoginAttempts: 0 } : {}), updatedAt: new Date().toISOString() });
       await writeAudit(ctx, {
         entityType: "User",
         entityId: id,
@@ -360,12 +400,13 @@ export const runBackup = mutation({
   },
   handler: async (ctx, args) => {
     const actor = await requirePermission(ctx, "system:backup");
+    if (args.type !== "full") throw forbiddenError("Incremental exports are unavailable. Use the platform backup service for incremental recovery.");
     const record = await ctx.db.insert("backups", {
       startedAt: new Date().toISOString(),
       type: args.type,
-      sizeMb: args.type === "full" ? 2450 : 180,
-      status: "success",
-      target: "convex://managed-backups",
+      sizeMb: 0,
+      status: "running",
+      target: "Convex storage - application records only, not a recovery snapshot",
       restoreTested: false,
     });
     await writeAudit(ctx, {
@@ -374,8 +415,9 @@ export const runBackup = mutation({
       entityLabel: `${args.type} backup`,
       action: "create",
       performedBy: actor._id,
-      details: "Manual backup triggered and completed.",
+      details: "Application-record export queued. Authentication and file bytes require a separate platform snapshot.",
     });
+    await ctx.scheduler.runAfter(0, internal.actions.backups.createArchive, { id: record });
     return ctx.db.get("backups", record);
   },
 });
@@ -460,17 +502,20 @@ export const saveReport = mutation({
     id: v.optional(v.id("reports")),
     name: v.string(),
     description: v.string(),
-    filters: v.any(),
-    cadence: v.string(),
+    filters: reportFiltersValidator,
+    cadence: v.union(v.literal("none"), v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")),
     recipients: v.array(v.string()),
-    format: v.string(),
+    format: v.union(v.literal("csv"), v.literal("pdf"), v.literal("xlsx")),
   },
   handler: async (ctx, args) => {
     const actor = await requirePermission(ctx, "report:build");
+    if (args.cadence !== "none") await requirePermission(ctx, "report:schedule");
+    if (args.recipients.length > 30 || args.recipients.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw forbiddenError("Enter up to 30 valid recipient emails.");
     const now = new Date().toISOString();
     if (args.id) {
       const existing = await ctx.db.get("reports", args.id);
       if (!existing) throw forbiddenError("Report not found.");
+      if (existing.creatorId !== actor._id && actor.roleId !== "super_admin" && actor.roleId !== "admin") throw forbiddenError("Only the report owner or an administrator can change its schedule.");
       await ctx.db.patch("reports", args.id, {
         name: args.name,
         description: args.description,
@@ -478,6 +523,7 @@ export const saveReport = mutation({
         cadence: args.cadence as never,
         recipients: args.recipients,
         format: args.format as never,
+        nextRun: nextReportRun(args.cadence),
       });
       await writeAudit(ctx, {
         entityType: "Report",
@@ -498,7 +544,7 @@ export const saveReport = mutation({
       recipients: args.recipients,
       format: args.format as never,
       lastRun: undefined,
-      nextRun: args.cadence !== "none" ? now : undefined,
+      nextRun: nextReportRun(args.cadence),
       createdAt: now,
     });
     await writeAudit(ctx, {
@@ -519,6 +565,7 @@ export const deleteReport = mutation({
     const actor = await requirePermission(ctx, "report:build");
     const report = await ctx.db.get("reports", args.id);
     if (!report) return false;
+    if (report.creatorId !== actor._id && actor.roleId !== "super_admin" && actor.roleId !== "admin") throw forbiddenError("Only the report owner or an administrator can delete it.");
     await ctx.db.delete("reports", args.id);
     await writeAudit(ctx, {
       entityType: "Report",
@@ -529,6 +576,35 @@ export const deleteReport = mutation({
       details: "Saved report deleted.",
     });
     return true;
+  },
+});
+
+export const recordReportExport = mutation({
+  args: { name: v.string(), rowCount: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requirePermission(ctx, "report:export");
+    await writeAudit(ctx, { entityType: "Report", entityId: "ad-hoc", entityLabel: args.name, action: "export", performedBy: actor._id, details: `Exported ${args.rowCount} grouped rows.` });
+    return null;
+  },
+});
+
+export const resendInvitation = mutation({
+  args: { id: v.id("users") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requirePermission(ctx, "user:write");
+    const user = await ctx.db.get(args.id);
+    if (!user || user.status !== "invited") throw forbiddenError("Only an unactivated invitation can be resent.");
+    if (user.roleId === "super_admin" && actor.roleId !== "super_admin") throw forbiddenError("Only a Super Administrator can manage that invitation.");
+    const invitation = await ctx.db.query("invitations").withIndex("by_user", (query) => query.eq("userId", args.id)).order("desc").first();
+    if (invitation && (invitation.leaseUntil ?? 0) > Date.now()) throw forbiddenError("Invitation delivery is already running. Try again shortly.");
+    const invitationId = invitation?._id ?? await ctx.db.insert("invitations", { userId: args.id, token: randomSecret(), expiresAt: Date.now() + 7 * 86400000, attempts: 0, status: "pending" });
+    if (invitation) await ctx.db.patch(invitation._id, { token: randomSecret(), expiresAt: Date.now() + 7 * 86400000, attempts: 0, status: "pending", leaseUntil: undefined, error: undefined });
+    await ctx.db.patch(user._id, { invitationStatus: "pending" });
+    await ctx.scheduler.runAfter(0, internal.accountActions.deliverInvitation, { invitationId });
+    await writeAudit(ctx, { entityType: "User", entityId: user._id, entityLabel: user.name, action: "update", performedBy: actor._id, details: "Invitation delivery queued again." });
+    return null;
   },
 });
 

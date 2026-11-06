@@ -73,7 +73,8 @@ export const create = mutation({
     const iso = now.toISOString();
 
     // Statutory due date: FOI Act §4 — 7 working days.
-    const statutoryDueDate = addWorkingDays(now, 7);
+    const settings = await ctx.db.query("systemSettings").first();
+    const statutoryDueDate = addWorkingDays(now, settings?.statutoryResponseDays ?? 7);
 
     // Case number from counters.
     const year = now.getFullYear();

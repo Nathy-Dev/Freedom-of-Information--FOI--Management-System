@@ -3,7 +3,8 @@
  */
 
 import { query } from "../_generated/server";
-import { getCurrentUser } from "../lib/session";
+import { getCurrentUser, sessionSecurityRequirement } from "../lib/session";
+import { components } from "../_generated/api";
 import { getRole, homeRouteFor, isReadOnly, permissionsFor } from "../lib/permissions";
 
 /** Current signed-in user + role + permissions (used by AuthContext). */
@@ -13,8 +14,10 @@ export const me = query({
     const user = await getCurrentUser(ctx);
     if (!user) return null;
     const roleId = user.roleId;
+    const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, { model: "user", where: [{ field: "_id", value: user.authUserId }] });
     return {
-      user,
+      user: { ...user, mfaEnabled: authUser?.twoFactorEnabled === true },
+      securityRequired: await sessionSecurityRequirement(ctx, user),
       role: getRole(roleId),
       permissions: permissionsFor(roleId),
       isReadOnly: isReadOnly(roleId),
@@ -28,7 +31,7 @@ export const teamMemberIds = query({
   args: {},
   handler: async (ctx) => {
     const user = await getCurrentUser(ctx);
-    if (!user) return [];
+    if (!user || user.status !== "active" || await sessionSecurityRequirement(ctx, user)) return [];
     if (!user.teamId) return [];
     // legalTeams is bounded reference data; fetch all and match by id.
     const all = await ctx.db.query("legalTeams").take(200);

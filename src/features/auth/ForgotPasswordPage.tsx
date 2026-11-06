@@ -11,18 +11,23 @@ export function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [sent, setSent] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const settings = usePublicSettings()
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setBusy(true)
+    setError(null)
     try {
-      await authClient.requestPasswordReset({
+      const result = await authClient.requestPasswordReset({
         email: email.trim().toLowerCase(),
         redirectTo: `${window.location.origin}/reset-password`,
       })
+      if (result.error) throw new Error('Password recovery could not be sent. Please try again or contact the administrator.')
       // Deliberately does not reveal whether the address is registered.
       setSent(true)
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Password recovery is temporarily unavailable.')
     } finally {
       setBusy(false)
     }
@@ -66,6 +71,7 @@ export function ForgotPasswordPage() {
       description="Enter the email address on your account and we will send you a link to set a new password."
     >
       <form onSubmit={submit} className="space-y-4">
+        {error ? <p role="alert" className="text-sm text-crest-700">{error}</p> : null}
         <Input
           label="Email address"
           type="email"

@@ -12,6 +12,7 @@ export interface MeResult {
   permissions: Permission[]
   isReadOnly: boolean
   homeRoute: string
+  securityRequired: string | null
 }
 
 /**
@@ -52,7 +53,6 @@ export function useUpdateProfile() {
       organization: patch.organization,
       position: patch.position,
       department: patch.department,
-      mfaEnabled: patch.mfaEnabled,
     })
   }
 }

@@ -74,7 +74,7 @@ export const reportDelivery = internalAction({
       recipients: string[];
     }>;
     for (const r of due) {
-      await ctx.runMutation(internal.internal.cronWorkers.markReportRun, { reportId: r.id as never, now });
+      await ctx.scheduler.runAfter(0, internal.actions.reports.deliver, { reportId: r.id as never });
     }
     return { due: due.length };
   },
@@ -90,11 +90,8 @@ export const retention = internalAction({
 
 export const sessionCleanup = internalAction({
   args: {},
-  handler: async () => {
-    // Better Auth sessions are managed by the component; expiry is enforced by
-    // the session TTL. This job is a no-op hook for future explicit revocation.
-    return { ok: true };
-  },
+  returns: v.object({ removed: v.number() }),
+  handler: async (ctx): Promise<{ removed: number }> => ctx.runMutation(internal.internal.cronWorkers.cleanupSessions, {}),
 });
 
 export const retryPipeline = internalAction({

@@ -104,7 +104,7 @@ export function useSystemSettings(enabled = true) {
 
 export function usePublicSettings() {
   return useQuery(api.queries.admin.publicSettings, {}) as
-    | { passwordMinLength: number; passwordRotationDays: number; selfRegistrationEnabled: boolean }
+    | { passwordMinLength: number; passwordRotationDays: number; selfRegistrationEnabled: boolean; sessionTimeoutMinutes: number; ssoEnabled: boolean }
     | null
     | undefined
 }

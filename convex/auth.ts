@@ -1,16 +1,19 @@
 import { betterAuth } from "better-auth";
-import { APIError, createAuthMiddleware, getIp, isAPIError } from "better-auth/api";
+import { APIError, createAuthMiddleware, getIP, getSessionFromCtx, isAPIError } from "better-auth/api";
 import { twoFactor } from "better-auth/plugins/two-factor";
 import { jwt } from "better-auth/plugins/jwt";
-import { genericOAuth } from "better-auth/plugins/generic-oauth";
+import { genericOAuth, microsoftEntraId } from "better-auth/plugins/generic-oauth";
+import { entraConfigured, entraTenant } from "./lib/entraSettings";
 import { createClient } from "@convex-dev/better-auth";
 import { convex as convexPlugin } from "@convex-dev/better-auth/plugins";
 import type { GenericCtx } from "@convex-dev/better-auth";
+import { requireActionCtx, requireRunMutationCtx } from "@convex-dev/better-auth/utils";
 import { components, internal } from "./_generated/api";
 import { v } from "convex/values";
 import { internalQuery, mutation, internalMutation } from "./_generated/server";
 import authConfig from "./auth.config";
 import { SYSTEM_ACTOR_ID, writeAudit } from "./lib/audit";
+import type { DataModel } from "./_generated/dataModel";
 
 const AUTH_AUDIT_PATHS = new Set([
   "/sign-up/email",
@@ -55,8 +58,15 @@ export const recordAuthEvent = internalMutation({
     ipAddress: v.string(),
     userAgent: v.string(),
     mfaEnabled: v.optional(v.boolean()),
+    verifiedSessionId: v.optional(v.string()),
+    countFailedPassword: v.optional(v.boolean()),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
+    if (args.verifiedSessionId && args.action === "login") {
+      const session = await ctx.db.query("userSessions").withIndex("by_session", (query) => query.eq("authSessionId", args.verifiedSessionId!)).unique();
+      if (session && session.authUserId === args.authUserId) await ctx.db.patch(session._id, { secondFactorVerifiedAt: Date.now(), secondFactorAttempts: 0 });
+    }
     const profile = args.authUserId
       ? await ctx.db
           .query("users")
@@ -74,6 +84,14 @@ export const recordAuthEvent = internalMutation({
         mfaEnabled: args.mfaEnabled,
         updatedAt: new Date().toISOString(),
       });
+    }
+
+    if (profile && args.countFailedPassword && profile.status === "active") {
+      const settings = await ctx.db.query("systemSettings").first();
+      const attempts = (profile.failedLoginAttempts ?? 0) + 1;
+      await ctx.db.patch(profile._id, { failedLoginAttempts: attempts, status: attempts >= (settings?.lockoutAttempts ?? 5) ? "locked" : profile.status });
+    } else if (profile && args.action === "login") {
+      await ctx.db.patch(profile._id, { failedLoginAttempts: 0, lastLoginAt: new Date().toISOString() });
     }
 
     await writeAudit(ctx, {
@@ -105,11 +123,26 @@ export const recordAuthEvent = internalMutation({
  *   `requestor`); admins later assign roles.
  */
 
-export const authComponent = createClient(components.betterAuth, {
+export const authComponent: ReturnType<typeof createClient<DataModel>> = createClient<DataModel>(components.betterAuth, {
   triggers: {
+    session: {
+      async onCreate(ctx, doc) {
+        await ctx.db.insert("userSessions", { authSessionId: doc._id, authUserId: doc.userId, lastSeenAt: Date.now() });
+      },
+      async onDelete(ctx, doc) {
+        const session = await ctx.db.query("userSessions").withIndex("by_session", (query) => query.eq("authSessionId", doc._id)).unique();
+        if (session) await ctx.db.delete(session._id);
+      },
+    },
     user: {
       async onCreate(ctx: import("./_generated/server").MutationCtx, doc) {
         const now = new Date().toISOString();
+        const reserved = await ctx.db.query("users").withIndex("by_email", (query) => query.eq("email", doc.email.trim().toLowerCase())).unique();
+        if (reserved) {
+          if (reserved.status === "invited" && reserved.authUserId.startsWith("invited:") && doc.emailVerified === true) await ctx.db.patch(reserved._id, { authUserId: doc._id, updatedAt: now });
+          else if (reserved.authUserId !== doc._id) throw new Error("This email is already linked to another account.");
+          return;
+        }
         // `phone`/`organization` come from the self-registration form via
         // Better Auth additionalFields; absent for SSO/CSV-created users.
         const extra = doc as { phone?: string; organization?: string };
@@ -118,7 +151,7 @@ export const authComponent = createClient(components.betterAuth, {
         await ctx.db.insert("users", {
           authUserId: doc._id,
           name: doc.name,
-          email: doc.email,
+          email: doc.email.trim().toLowerCase(),
           roleId: "requestor",
           phone: extra.phone || undefined,
           organization: extra.organization ?? "",
@@ -131,6 +164,7 @@ export const authComponent = createClient(components.betterAuth, {
             .map((p) => p[0]!.toUpperCase())
             .join(""),
           mfaEnabled: false,
+          passwordChangedAt: now,
           createdAt: now,
           updatedAt: now,
         });
@@ -144,18 +178,21 @@ export const authComponent = createClient(components.betterAuth, {
         if (profile) {
           await ctx.db.patch("users", profile._id, {
             name: newDoc.name,
-            email: newDoc.email,
+            email: newDoc.email.trim().toLowerCase(),
+            mfaEnabled: newDoc.twoFactorEnabled === true,
             updatedAt: new Date().toISOString(),
           });
         }
       },
     },
   },
-  authFunctions: {},
+  authFunctions: { onCreate: internal.auth.onCreate, onUpdate: internal.auth.onUpdate, onDelete: internal.auth.onDelete },
 });
 
+export const { onCreate, onUpdate, onDelete } = authComponent.triggersApi();
+
 /** The Better Auth instance factory — used by the HTTP handler and `getAuth`. */
-export const createAuth = (ctx: GenericCtx, options: { allowSystemProvisioning?: boolean } = {}) => {
+export const createAuth = (ctx: GenericCtx<DataModel>, options: { allowSystemProvisioning?: boolean } = {}) => {
   const secret = process.env.BETTER_AUTH_SECRET;
   if (!secret) {
     throw new Error("BETTER_AUTH_SECRET is not configured");
@@ -163,11 +200,21 @@ export const createAuth = (ctx: GenericCtx, options: { allowSystemProvisioning?:
   return betterAuth({
     secret,
     baseURL: process.env.BETTER_AUTH_URL,
+    account: { accountLinking: { enabled: true, disableImplicitLinking: true, requireLocalEmailVerified: true, allowDifferentEmails: false } },
     database: authComponent.adapter(ctx),
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
       requireEmailVerification: false,
+      resetPasswordTokenExpiresIn: 3600,
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: async ({ user, url }) => {
+        const sent = await requireActionCtx(ctx).runAction(internal.actions.email.deliverAccountEmail, { to: user.email, url, invitation: false });
+        if (!sent) throw new APIError("SERVICE_UNAVAILABLE", { message: "Password recovery email is unavailable. Contact the administrator." });
+      },
+      onPasswordReset: async ({ user }) => {
+        await requireRunMutationCtx(ctx).runMutation(internal.internal.accountDb.activate, { authUserId: user.id });
+      },
     },
     advanced: {
       ipAddress: {
@@ -177,10 +224,30 @@ export const createAuth = (ctx: GenericCtx, options: { allowSystemProvisioning?:
         ipAddressHeaders: ["x-forwarded-for", "x-real-ip", "cf-connecting-ip", "x-client-ip"],
       },
     },
+    rateLimit: { enabled: true, storage: "database", window: 60, max: 60 },
     hooks: {
       before: createAuthMiddleware(async (hookContext) => {
-        if (options.allowSystemProvisioning || hookContext.path !== "/sign-up/email") return;
-
+        if (options.allowSystemProvisioning) return;
+        if (hookContext.path === "/sign-in/social" || hookContext.path === "/link-social" || hookContext.path === "/callback/microsoft-entra-id") {
+          const enabled = await ctx.runQuery(internal.internal.accountDb.ssoEnabled, {});
+          if (!enabled || !entraConfigured(process.env)) throw new APIError("FORBIDDEN", { message: "Staff single sign-on is not configured. Use your password or contact the administrator." });
+        }
+        const body = hookContext.body as { email?: string; password?: string; newPassword?: string } | undefined;
+        if (hookContext.path === "/two-factor/verify-totp" || hookContext.path === "/two-factor/verify-backup-code") {
+          const session = await getSessionFromCtx(hookContext);
+          if (session && !(await requireRunMutationCtx(ctx).runMutation(internal.internal.accountDb.reserveSecondFactorAttempt, { sessionId: session.session.id, authUserId: session.user.id }))) throw new APIError("TOO_MANY_REQUESTS", { message: "Too many attempts or an expired session. Sign out and sign in again." });
+        }
+        const policy = await ctx.runQuery(internal.internal.accountDb.passwordPolicy, { email: body?.email });
+        if (hookContext.path === "/two-factor/disable") {
+          const session = await getSessionFromCtx(hookContext);
+          const requirement = await ctx.runQuery(internal.internal.accountDb.mfaRequirement, { authUserId: session?.user.id ?? "" });
+          if (requirement) throw new APIError("FORBIDDEN", { message: "Your account requires an authenticator. Contact the administrator before removing it." });
+        }
+        if (hookContext.path === "/sign-in/email" && policy.unavailable) throw new APIError("FORBIDDEN", { message: "This account is unavailable. Contact the administrator." });
+        const newPassword = hookContext.path === "/sign-up/email" ? body?.password : body?.newPassword;
+        if (newPassword !== undefined && newPassword.length < policy.minLength) throw new APIError("BAD_REQUEST", { message: `Use at least ${policy.minLength} characters for your password.` });
+        if (hookContext.path !== "/sign-up/email") return;
+        if (policy.reserved) throw new APIError("FORBIDDEN", { message: "This email already has an account. Sign in or use password recovery." });
         const enabled = await ctx.runQuery(internal.auth.selfRegistrationEnabled, {});
         if (!enabled) {
           throw new APIError("FORBIDDEN", {
@@ -199,7 +266,8 @@ export const createAuth = (ctx: GenericCtx, options: { allowSystemProvisioning?:
           typeof hookContext.body === "object" && hookContext.body !== null
             ? (hookContext.body as Record<string, unknown>)
             : {};
-        const sessionUser = hookContext.context.newSession?.user ?? hookContext.context.session?.user;
+        const currentSession = hookContext.context.newSession ?? await getSessionFromCtx(hookContext);
+        const sessionUser = currentSession?.user;
         const email = sessionUser?.email ?? (typeof body.email === "string" ? body.email : undefined);
         const authUserId = sessionUser?.id;
         const entityId = authUserId ?? email ?? "unknown";
@@ -242,6 +310,8 @@ export const createAuth = (ctx: GenericCtx, options: { allowSystemProvisioning?:
 
         if (!action || !("runMutation" in ctx)) return;
 
+        if (!failed && path === "/change-password" && authUserId) await ctx.runMutation(internal.internal.accountDb.activate, { authUserId });
+
         try {
           await ctx.runMutation(internal.auth.recordAuthEvent, {
             action,
@@ -251,9 +321,11 @@ export const createAuth = (ctx: GenericCtx, options: { allowSystemProvisioning?:
             authUserId,
             email,
             details,
-            ipAddress: hookContext.request ? getIp(hookContext.request, hookContext.context.options) ?? "" : "",
+            ipAddress: hookContext.request ? getIP(hookContext.request, hookContext.context.options) ?? "" : "",
             userAgent: hookContext.request?.headers.get("user-agent") ?? "",
             mfaEnabled,
+            verifiedSessionId: !failed && (path === "/two-factor/verify-totp" || path === "/two-factor/verify-backup-code") ? currentSession?.session.id : undefined,
+            countFailedPassword: failed && path === "/sign-in/email",
           });
         } catch (error) {
           // Auditing must not turn a successful authentication response into a
@@ -284,14 +356,14 @@ export const createAuth = (ctx: GenericCtx, options: { allowSystemProvisioning?:
         },
       }),
       genericOAuth({
-        config: [
-          {
-            providerId: "microsoft-entra-id",
-            clientId: process.env.ENTRA_ID_CLIENT_ID ?? "",
-            clientSecret: process.env.ENTRA_ID_CLIENT_SECRET ?? "",
-            scopes: ["openid", "email", "profile"],
-          },
-        ],
+        config: entraConfigured(process.env) ? [microsoftEntraId({
+          tenantId: entraTenant(process.env)!,
+          clientId: process.env.ENTRA_ID_CLIENT_ID!,
+          clientSecret: process.env.ENTRA_ID_CLIENT_SECRET!,
+          disableSignUp: true,
+          pkce: true,
+          overrideUserInfo: false,
+        })] : [],
       }),
       convexPlugin({ authConfig }),
     ],
@@ -316,8 +388,8 @@ export const updateMyProfile = mutation({
     organization: v.optional(v.string()),
     position: v.optional(v.string()),
     department: v.optional(v.string()),
-    mfaEnabled: v.optional(v.boolean()),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const authUser = await safeGetAuthUser(ctx);
     if (!authUser) throw new Error("Not authenticated");
@@ -326,6 +398,7 @@ export const updateMyProfile = mutation({
       .withIndex("by_auth_user", (q) => q.eq("authUserId", authUser._id))
       .first();
     if (!user) throw new Error("User profile not found");
+    if (user.status !== "active") throw new Error("This account is not active.");
     
     await ctx.db.patch("users", user._id, {
       ...(args.name !== undefined ? { name: args.name } : {}),
@@ -333,7 +406,6 @@ export const updateMyProfile = mutation({
       ...(args.organization !== undefined ? { organization: args.organization } : {}),
       ...(args.position !== undefined ? { position: args.position || undefined } : {}),
       ...(args.department !== undefined ? { department: args.department || undefined } : {}),
-      ...(args.mfaEnabled !== undefined ? { mfaEnabled: args.mfaEnabled } : {}),
       updatedAt: new Date().toISOString(),
     });
     return null;
@@ -358,6 +430,9 @@ export const ensureMyProfile = mutation({
       .first();
     if (existing) return existing;
 
+    const reserved = await ctx.db.query("users").withIndex("by_email", (query) => query.eq("email", authUser.email.trim().toLowerCase())).unique();
+    if (reserved) throw new Error("An account already exists for this email. Contact the administrator.");
+
     const now = new Date().toISOString();
     const name = authUser.name || authUser.email || "Unknown";
     const id = await ctx.db.insert("users", {
@@ -379,5 +454,26 @@ export const ensureMyProfile = mutation({
       updatedAt: now,
     });
     return ctx.db.get("users", id);
+  },
+});
+
+export const touch = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const authUser = await safeGetAuthUser(ctx);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!authUser || !identity?.sessionId) throw new Error("Sign in again.");
+    const storedSession = await ctx.runQuery(components.betterAuth.adapter.findOne, { model: "session", where: [{ field: "_id", value: String(identity.sessionId) }] });
+    if (!storedSession || storedSession.userId !== authUser._id || storedSession.expiresAt <= Date.now()) throw new Error("Sign in again.");
+    const profile = await ctx.db.query("users").withIndex("by_auth_user", (query) => query.eq("authUserId", authUser._id)).unique();
+    if (!profile || profile.status !== "active") throw new Error("This account is not active.");
+    const sessionId = String(identity.sessionId);
+    const projection = await ctx.db.query("userSessions").withIndex("by_session", (query) => query.eq("authSessionId", sessionId)).unique();
+    const settings = await ctx.db.query("systemSettings").first();
+    if (settings?.sessionTimeoutMinutes && Date.now() - (projection?.lastSeenAt ?? storedSession.createdAt) > settings.sessionTimeoutMinutes * 60000) throw new Error("Signed out due to inactivity. Sign in again.");
+    if (projection) await ctx.db.patch(projection._id, { lastSeenAt: Date.now() });
+    else await ctx.db.insert("userSessions", { authSessionId: sessionId, authUserId: authUser._id, lastSeenAt: Date.now() });
+    return null;
   },
 });

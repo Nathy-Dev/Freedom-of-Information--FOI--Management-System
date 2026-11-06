@@ -12,6 +12,7 @@ import { HomeRedirect, RequireAnonymous, RequireAuth, RequirePermission } from '
 const LoginPage = lazy(() => import('@/features/auth').then((m) => ({ default: m.LoginPage })))
 const RegisterPage = lazy(() => import('@/features/auth').then((m) => ({ default: m.RegisterPage })))
 const ForgotPasswordPage = lazy(() => import('@/features/auth').then((m) => ({ default: m.ForgotPasswordPage })))
+const ResetPasswordPage = lazy(() => import('@/features/auth/ResetPasswordPage').then((module) => ({ default: module.ResetPasswordPage })))
 
 const SystemDashboard = lazy(() => import('@/features/dashboard').then((m) => ({ default: m.SystemDashboard })))
 const AdminDashboard = lazy(() => import('@/features/dashboard').then((m) => ({ default: m.AdminDashboard })))
@@ -85,6 +86,7 @@ function SuspendedOutlet() {
 export function AppRoutes() {
   return (
     <Routes>
+      <Route path="/reset-password" element={<Suspense fallback={<AuthFallback />}><ResetPasswordPage /></Suspense>} />
       {/* Public — sign-in, registration and recovery. */}
       <Route element={<RequireAnonymous />}>
         <Route

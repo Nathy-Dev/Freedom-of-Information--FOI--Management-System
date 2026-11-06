@@ -1,4 +1,16 @@
 "use node";
+import { internalAction } from "../_generated/server";
+import { v } from "convex/values";
+
+export const deliverAccountEmail = internalAction({
+  args: { to: v.string(), url: v.string(), invitation: v.boolean(), idempotencyKey: v.optional(v.string()) },
+  returns: v.boolean(),
+  handler: async (_ctx, args) => {
+    const escapedUrl = args.url.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    const result = await sendEmail({ to: args.to, subject: args.invitation ? "Your HYPREP account invitation" : "Reset your HYPREP password", html: `<p>${args.invitation ? "Your HYPREP account is ready. Set your password to activate it." : "Use the secure link to reset your password."}</p><p><a href="${escapedUrl}">Set password</a></p><p>If you did not expect this email, contact HYPREP.</p>`, text: `Set your HYPREP password: ${args.url}`, idempotencyKey: args.idempotencyKey });
+    return !result.skipped;
+  },
+});
 
 /**
  * Email delivery via Resend (user-resolved choice).
@@ -15,6 +27,8 @@ export async function sendEmail(input: {
   html: string;
   text?: string;
   replyTo?: string;
+  idempotencyKey?: string;
+  attachments?: Array<{ filename: string; content: string }>;
 }): Promise<{ id: string | null; skipped: boolean }> {
   const apiKey = process.env.RESEND_API_KEY;
   const fromAddress = process.env.EMAIL_FROM_ADDRESS;
@@ -34,6 +48,7 @@ export async function sendEmail(input: {
       headers: {
         authorization: `Bearer ${apiKey}`,
         "content-type": "application/json",
+        ...(input.idempotencyKey ? { "idempotency-key": input.idempotencyKey } : {}),
       },
       body: JSON.stringify({
         from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
@@ -42,7 +57,9 @@ export async function sendEmail(input: {
         html: input.html,
         text: input.text ?? input.html.replace(/<[^>]*>/g, ""),
         ...(input.replyTo ? { reply_to: input.replyTo } : {}),
+        ...(input.attachments ? { attachments: input.attachments } : {}),
       }),
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!res.ok) {
@@ -51,7 +68,8 @@ export async function sendEmail(input: {
     }
 
     const body = (await res.json()) as { id?: string };
-    return { id: body.id ?? null, skipped: false };
+    if (!body.id) throw new Error("The email provider did not confirm acceptance.");
+    return { id: body.id, skipped: false };
   } catch (e) {
     console.error("[email] Resend delivery failed:", e);
     throw e;

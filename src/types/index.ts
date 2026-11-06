@@ -107,6 +107,8 @@ export interface User {
   avatarColor: string
   initials: string
   mfaEnabled: boolean
+  mfaRequired?: boolean
+  invitationStatus?: 'pending' | 'sent' | 'failed' | 'blocked'
   lastLoginAt?: string
   createdAt: string
   updatedAt: string
@@ -231,6 +233,8 @@ export interface FoiDocument {
   ocr: OcrStatus
   retentionLabel: string
   retainUntil: string
+  legalHold?: boolean
+  retentionReviewAt?: string
   versions: DocumentVersion[]
   createdAt: string
 }
@@ -577,6 +581,10 @@ export interface BackupRecord {
   status: 'success' | 'running' | 'failed'
   target: string
   restoreTested: boolean
+  storageId?: string
+  checksum?: string
+  error?: string
+  completedAt?: string
 }
 
 export interface Webhook {

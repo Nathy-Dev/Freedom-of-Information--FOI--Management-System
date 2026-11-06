@@ -24,13 +24,15 @@ export function BootSplash() {
  * with the attempted path preserved, so they land where they meant to go.
  */
 export function RequireAuth() {
-  const { isAuthenticated, isBooting } = useAuth()
+  const { isAuthenticated, isBooting, user, securityRequired, logout } = useAuth()
   const location = useLocation()
 
   if (isBooting) return <BootSplash />
   if (!isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />
   }
+  if (user && user.status !== 'active') return <div className="p-8"><h1 className="text-xl font-semibold">Account unavailable</h1><p className="my-4">Your account is {user.status}. Contact the administrator or use your invitation email to activate it.</p><button onClick={() => void logout()}>Sign out</button></div>
+  if (securityRequired && location.pathname !== '/profile') return <Navigate to="/profile?tab=security" replace />
   return <Outlet />
 }
 

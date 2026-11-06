@@ -38,7 +38,8 @@ const DataContext = createContext<DataContextValue | null>(null)
 const SIDEBAR_KEY = 'hyprep-foi.sidebar'
 
 export function DataProvider({ children }: { children: ReactNode }) {
-  const { user, can } = useAuth()
+  const { user: signedInUser, can, securityRequired } = useAuth()
+  const user = signedInUser?.status === 'active' && !securityRequired ? signedInUser : null
   // Skip the queries entirely until a session exists — avoids firing them (and
   // any unauthenticated console noise) while the login screen is up. `'SKIP'`
   // keeps the hooks unconditional, satisfying the Rules of Hooks.

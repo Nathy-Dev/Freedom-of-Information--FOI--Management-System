@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { useMutation } from 'convex/react'
+import { api } from '../../../../convex/_generated/api'
 import {
   Download,
   Eye,
@@ -26,7 +28,7 @@ import {
   Tooltip,
 } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
-import { usePublishDocument, useRecordDocumentAccess, useRedactDocument, useUploadDocument } from '@/api/documents'
+import { usePublishDocument, useDocumentFile, useRedactDocument, useUploadDocument } from '@/api/documents'
 import { useData } from '@/store/DataContext'
 import {
   CONFIDENTIALITY_META,
@@ -68,13 +70,16 @@ export function CaseDocumentsPanel({
   canRedact = false,
   publishedOnly = false,
 }: CaseDocumentsPanelProps) {
-  const { user } = useAuth()
+  const { user, can } = useAuth()
+  const setLegalHold = useMutation(api.mutations.documents.setLegalHold)
+  const [holdTarget, setHoldTarget] = useState<FoiDocument | null>(null)
+  const [holdReason, setHoldReason] = useState('')
   const { reference, usersById } = useData()
   const liveReference = reference ?? { retentionLabels: [] }
   const uploadDocument = useUploadDocument()
   const redactDocument = useRedactDocument()
   const publishDocument = usePublishDocument()
-  const recordAccess = useRecordDocumentAccess()
+  const getFile = useDocumentFile()
   const toast = useToast()
   const [uploadOpen, setUploadOpen] = useState(false)
   const [redactTarget, setRedactTarget] = useState<FoiDocument | null>(null)
@@ -85,9 +90,11 @@ export function CaseDocumentsPanel({
   const [kind, setKind] = useState<DocumentKind>('response')
   const [level, setLevel] = useState<Confidentiality>('internal')
   const [retention, setRetention] = useState('7 years')
-  const [notifyRequestor, setNotifyRequestor] = useState(false)
 
   const [severances, setSeverances] = useState('3')
+  const [disclosureFile, setDisclosureFile] = useState<File | null>(null)
+  const [confirmedRemoval, setConfirmedRemoval] = useState(false)
+  const [releaseError, setReleaseError] = useState('')
   const [grounds, setGrounds] = useState('Section 14 — personal information of a third party')
 
   const visible = publishedOnly ? documents.filter((doc) => doc.isPublic) : documents
@@ -100,14 +107,14 @@ export function CaseDocumentsPanel({
         await uploadDocument(caseId, file, {
             kind,
             confidentiality: level,
-            isPublic: notifyRequestor,
+            isPublic: false,
             retentionLabel: retention,
         })
       }
       onChanged()
       toast.success(
         `${files.length} ${files.length === 1 ? 'document' : 'documents'} uploaded`,
-        'Each file was virus-scanned and versioned against this case.',
+        'Files are queued for virus scanning. They cannot be opened until the checks pass.',
       )
       setFiles([])
       setUploadOpen(false)
@@ -117,13 +124,18 @@ export function CaseDocumentsPanel({
   }
 
   const doRedact = async () => {
-    if (!user || !redactTarget) return
+    if (!user || !redactTarget || !disclosureFile) return
+    setReleaseError('')
     setBusy(true)
     try {
-      await redactDocument(redactTarget.id, Math.max(1, Number(severances) || 1), grounds)
+      await redactDocument(redactTarget.id, Math.max(1, Number(severances) || 1), grounds, disclosureFile, confirmedRemoval)
       onChanged()
-      toast.success('Redactions recorded', `A new version of ${redactTarget.fileName} was created.`)
+      toast.success('Disclosure copy saved', 'The file must pass a virus scan before it can be published.')
       setRedactTarget(null)
+      setDisclosureFile(null)
+      setConfirmedRemoval(false)
+    } catch (failure) {
+      setReleaseError(failure instanceof Error ? failure.message : 'The disclosure copy could not be saved.')
     } finally {
       setBusy(false)
     }
@@ -136,10 +148,17 @@ export function CaseDocumentsPanel({
     toast.success('Published to the requestor', `${doc.fileName} is now downloadable in their portal.`)
   }
 
-  const doDownload = (doc: FoiDocument) => {
+  const doDownload = async (doc: FoiDocument) => {
     if (!user) return
-    void recordAccess(doc.id, 'download')
-    toast.info('Download recorded', `Access to ${doc.fileName} was written to the access log.`)
+    try {
+      const file = await getFile(doc.id)
+      const response = await fetch(file.url)
+      if (!response.ok) throw new Error('Download failed or access expired.')
+      const url = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a'); link.href = url; link.download = file.filename; link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast.success('File downloaded', 'Access was recorded in the audit trail.')
+    } catch (error) { toast.error('Download failed', error instanceof Error ? error.message : 'Please try again.') }
   }
 
   return (
@@ -259,7 +278,8 @@ export function CaseDocumentsPanel({
                         ) : null}
                       </div>
                     </div>
-                    <p className="text-2xs text-ink-400">
+                   <p className="text-2xs text-ink-400">
+                      {can('document:retention') && !readOnly ? <Button size="sm" variant="outline" onClick={() => { setHoldTarget(doc); setHoldReason('') }}>{doc.legalHold ? 'Release legal hold' : 'Place legal hold'}</Button> : null}
                       Retention: {doc.retentionLabel} · checksum {doc.checksum}
                     </p>
                   </li>
@@ -270,6 +290,19 @@ export function CaseDocumentsPanel({
         </CardBody>
       </Card>
 
+      <Modal open={Boolean(holdTarget)} onClose={() => setHoldTarget(null)} title={holdTarget?.legalHold ? 'Release legal hold' : 'Place legal hold'} footer={<Button isLoading={busy} disabled={holdReason.trim().length < 10} onClick={async () => {
+        if (!holdTarget) return
+        setBusy(true)
+        try {
+          await setLegalHold({ documentId: holdTarget.id as never, enabled: !holdTarget.legalHold, reason: holdReason })
+          setHoldTarget(null)
+          onChanged()
+          toast.success('Legal hold updated', 'The reason is recorded. Releasing a hold does not delete the file.')
+        } catch (error) { toast.error('Legal hold not changed', error instanceof Error ? error.message : 'Please try again.') }
+        finally { setBusy(false) }
+      }}>Confirm change</Button>}>
+        <Textarea label="Reason for this change" value={holdReason} onChange={(event) => setHoldReason(event.target.value)} maxLength={1000} />
+      </Modal>
       <Modal
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
@@ -314,22 +347,7 @@ export function CaseDocumentsPanel({
               value={retention}
               onChange={(event) => setRetention(event.target.value)}
             />
-            <div className="flex items-end">
-              <label className="flex items-start gap-2 text-sm text-ink-700">
-                <input
-                  type="checkbox"
-                  checked={notifyRequestor}
-                  onChange={(event) => setNotifyRequestor(event.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-ink-300 text-brand-600 focus:ring-brand-500"
-                />
-                <span>
-                  Publish to the requestor
-                  <span className="block text-2xs text-ink-500">
-                    They are emailed and the file appears in their portal.
-                  </span>
-                </span>
-              </label>
-            </div>
+            <p className="text-xs text-ink-600">Files are uploaded privately. After scanning and any necessary redactions, use Publish to release an approved response to the requestor.</p>
           </div>
         </div>
       </Modal>
@@ -345,20 +363,23 @@ export function CaseDocumentsPanel({
             <Button variant="ghost" onClick={() => setRedactTarget(null)}>
               Cancel
             </Button>
-            <Button isLoading={busy} onClick={doRedact}>
-              Record redactions
+            <Button isLoading={busy} disabled={!disclosureFile || !confirmedRemoval} onClick={doRedact}>
+              Save disclosure copy
             </Button>
           </>
         }
       >
         <div className="space-y-4">
           <Input
-            label="Number of severances"
+            label="Number of items removed"
             type="number"
             min={1}
             value={severances}
             onChange={(event) => setSeverances(event.target.value)}
           />
+          <Input label="Permanently edited disclosure PDF" type="file" accept="application/pdf" onChange={(event) => setDisclosureFile(event.target.files?.[0] ?? null)} />
+          <label className="flex gap-2 text-sm"><input type="checkbox" checked={confirmedRemoval} onChange={(event) => setConfirmedRemoval(event.target.checked)} />I checked that sensitive text, images, metadata and attachments were permanently removed, not just covered.</label>
+          {releaseError && <p role="alert" className="text-sm text-red-700">{releaseError}</p>}
           <Textarea
             label="Grounds relied upon"
             rows={3}

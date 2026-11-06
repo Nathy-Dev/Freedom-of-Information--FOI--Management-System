@@ -1,11 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { useConvexAuth } from 'convex/react'
+import { useConvexAuth, useMutation } from 'convex/react'
 import type { Permission, Role, RoleId, User } from '@/types'
 import { getRole, hasPermission, homeRouteFor, isReadOnly, permissionsFor } from '@/lib/rbac'
 import { useEnsureMyProfile, useMe, useUpdateProfile } from '@/api/auth'
 import { authClient } from '@/convexClient'
 import type { MeResult } from '@/api/auth'
+import { api } from '../../convex/_generated/api'
+import { usePublicSettings } from '@/api/directory'
 
 /**
  * AuthContext — backed by Better Auth + Convex.
@@ -26,6 +28,7 @@ export type LoginOutcome =
   | { status: 'error'; message: string }
 
 interface AuthContextValue {
+  securityRequired: string | null
   user: User | null
   role: Role
   permissions: Permission[]
@@ -48,6 +51,8 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated: hasLiveSession } = useConvexAuth()
   const me = useMe()
+  const touch = useMutation(api.auth.touch)
+  const publicSettings = usePublicSettings()
   const updateProfileMutation = useUpdateProfile()
   const ensureMyProfile = useEnsureMyProfile()
   const [pendingMfaUserId, setPendingMfaUserId] = useState<string | null>(null)
@@ -116,7 +121,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loginWithSso = useCallback(async (): Promise<LoginOutcome> => {
     try {
-      await authClient.signIn.social({ provider: 'microsoft-entra-id', callbackURL: '/' })
+      const response = await authClient.signIn.social({ provider: 'microsoft-entra-id', callbackURL: '/' })
+      if (response.error) return { status: 'error', message: response.error.message ?? 'Staff single sign-on is unavailable.' }
       return { status: 'success' }
     } catch {
       return { status: 'error', message: 'Single sign-on is not available.' }
@@ -134,12 +140,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  useEffect(() => {
+    if (!user || user.status !== 'active') return
+    let lastActivity = Date.now()
+    let lastSent = 0
+    const ping = () => {
+      if (document.visibilityState === 'hidden') return
+      lastActivity = Date.now()
+      if (lastActivity - lastSent > 60000) {
+        lastSent = lastActivity
+        void touch({}).catch(() => void logout())
+      }
+    }
+    const events = ['pointerdown', 'pointermove', 'keydown', 'scroll'] as const
+    events.forEach((event) => window.addEventListener(event, ping, { passive: true }))
+    const timer = window.setInterval(() => {
+      if (publicSettings?.sessionTimeoutMinutes && Date.now() - lastActivity > publicSettings.sessionTimeoutMinutes * 60000) void logout()
+    }, 10000)
+    return () => {
+      events.forEach((event) => window.removeEventListener(event, ping))
+      window.clearInterval(timer)
+    }
+  }, [user?.id, user?.status, touch, logout, publicSettings?.sessionTimeoutMinutes])
+
   const updateProfile = useCallback((patch: Partial<User>) => updateProfileMutation(patch), [updateProfileMutation])
 
   const value = useMemo<AuthContextValue>(() => {
     const roleId = (user?.roleId ?? 'requestor') as RoleId
     return {
       user,
+      securityRequired: me?.securityRequired ?? null,
       role: getRole(roleId),
       permissions: user ? permissionsFor(roleId) : [],
       isAuthenticated: Boolean(user),
@@ -155,7 +185,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       updateProfile,
     }
-  }, [user, isBooting, pendingMfaUserId, login, loginWithSso, verifyMfa, cancelMfa, logout, updateProfile])
+  }, [user, me, isBooting, pendingMfaUserId, login, loginWithSso, verifyMfa, cancelMfa, logout, updateProfile])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

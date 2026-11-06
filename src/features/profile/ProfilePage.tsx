@@ -36,7 +36,7 @@ function getTotpSecret(totpUri: string) {
 }
 
 export function ProfilePage() {
-  const { user, role, permissions, isReadOnly, updateProfile, logout } = useAuth()
+  const { user, role, permissions, isReadOnly, securityRequired, updateProfile, logout } = useAuth()
   const { preferences, reference, setPreference } = useData()
   const settings = usePublicSettings()
   const toast = useToast()
@@ -57,6 +57,9 @@ export function ProfilePage() {
   const [mfaCode, setMfaCode] = useState('')
   const [mfaBusy, setMfaBusy] = useState(false)
   const [mfaError, setMfaError] = useState<string | null>(null)
+  const [sessionCode, setSessionCode] = useState('')
+  const [sessionBusy, setSessionBusy] = useState(false)
+  const [ssoBusy, setSsoBusy] = useState(false)
   const [mfaQrCode, setMfaQrCode] = useState<string | null>(null)
   const [mfaQrError, setMfaQrError] = useState<string | null>(null)
 
@@ -161,7 +164,8 @@ export function ProfilePage() {
           return
         }
         setMfaPassword('')
-        setMfaModal({ mode: 'enroll', totpUri: res.data?.totpURI ?? '', backupCodes: res.data?.backupCodes ?? [] })
+        if (!res.data || !('totpURI' in res.data)) throw new Error('Authenticator setup information is unavailable.')
+        setMfaModal({ mode: 'enroll', totpUri: res.data.totpURI, backupCodes: res.data.backupCodes })
       } catch {
         setMfaError('Could not start MFA setup. Try again.')
       } finally {
@@ -217,6 +221,34 @@ export function ProfilePage() {
       <PageHeader title="My profile" description="Your details, sign-in security, alert preferences and role permissions." icon={<UserCircle className="h-5 w-5" />} breadcrumbs={[{ label: 'My profile' }]} actions={<Button variant="ghost" leadingIcon={<LogOut className="h-4 w-4" />} onClick={logout}>Sign out</Button>} />
       <Card><CardBody className="flex flex-col gap-4 sm:flex-row sm:items-center"><div className="flex h-14 w-14 items-center justify-center rounded-full bg-brand-100 text-lg font-semibold text-brand-700">{user.initials}</div><div className="min-w-0 flex-1"><p className="text-lg font-semibold text-ink-900">{user.name}</p><p className="text-sm text-ink-600">{user.position ?? role?.name}</p><p className="mt-0.5 text-xs text-ink-500">{user.email} · {user.organization}{user.department ? ` · ${user.department}` : ''}</p></div><div className="flex flex-wrap items-center gap-2"><Badge tone="brand">{role?.name ?? user.roleId}</Badge><Badge tone={user.mfaEnabled ? 'success' : 'warning'}>{user.mfaEnabled ? 'MFA enrolled' : 'MFA not enrolled'}</Badge><Badge tone="neutral">{TIMEZONE_LABEL}</Badge></div></CardBody></Card>
       <Tabs tabs={TABS} active={tab} onChange={switchTab} label="Profile sections" />
+      {securityRequired ? <p role="alert" className="rounded border border-gold-200 bg-gold-50 p-3 text-sm">{securityRequired}</p> : null}
+      {tab === 'security' && user.mfaEnabled && securityRequired?.startsWith('Enter an authenticator') ? (
+        <Card><CardHeader title="Verify this session" description="Enter the current code from your authenticator before opening case records." /><CardBody className="max-w-xl space-y-3">
+          <Input label="6-digit authenticator code" inputMode="numeric" autoComplete="one-time-code" value={sessionCode} maxLength={6} onChange={(event) => setSessionCode(event.target.value.replace(/\D/g, ''))} />
+          <Button isLoading={sessionBusy} disabled={sessionCode.length !== 6} onClick={async () => {
+            setSessionBusy(true)
+            try {
+              const response = await authClient.twoFactor.verifyTotp({ code: sessionCode })
+              if (response.error) throw new Error(response.error.message ?? 'That code is not correct.')
+              setSessionCode('')
+              toast.success('Session verified', 'You can now use the system.')
+            } catch (error) { toast.error('Verification failed', error instanceof Error ? error.message : 'Please try again.') }
+            finally { setSessionBusy(false) }
+          }}>Verify session</Button>
+        </CardBody></Card>
+      ) : null}
+      {tab === 'security' && settings?.ssoEnabled && !securityRequired ? (
+        <Card><CardHeader title="Link Microsoft staff account" description="Sign in to Microsoft to link your staff account. Microsoft sign-in does not grant any additional role or case access." /><CardBody>
+          <Button isLoading={ssoBusy} onClick={async () => {
+            setSsoBusy(true)
+            try {
+              const response = await authClient.linkSocial({ provider: 'microsoft-entra-id', callbackURL: '/profile?tab=security' })
+              if (response.error) throw new Error(response.error.message ?? 'Microsoft account could not be linked.')
+            } catch (error) { toast.error('Link failed', error instanceof Error ? error.message : 'Please try again.') }
+            finally { setSsoBusy(false) }
+          }}>Link Microsoft account</Button>
+        </CardBody></Card>
+      ) : null}
 
       {tab === 'details' ? <div className="grid gap-4 lg:grid-cols-2"><Card><CardHeader title="Editable details" description="These fields are read from and written to your live user profile." actions={<Button size="sm" leadingIcon={<Save className="h-4 w-4" />} onClick={saveDetails} isLoading={isSaving} disabled={!isDirty}>Save</Button>} /><CardBody className="space-y-3"><Input label="Full name" value={name} onChange={(event) => setName(event.target.value)} required /><Input label="Phone" type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} /><Input label="Position" value={position} onChange={(event) => setPosition(event.target.value)} /><Select label="Department" options={departmentOptions} value={department} onChange={(event) => setDepartment(event.target.value)} /></CardBody></Card><Card><CardHeader title="Account record" description="Managed by the live identity and profile records." /><CardBody><DescriptionList columns={1} items={[{ label: 'Email address', value: user.email }, { label: 'Role', value: role?.name ?? user.roleId, hint: role?.description }, { label: 'Organisation', value: user.organization }, { label: 'Account status', value: <Badge tone="success">{user.status}</Badge> }, { label: 'Last sign-in', value: user.lastLoginAt ? <span title={formatDateTime(user.lastLoginAt)}>{formatRelative(user.lastLoginAt)}</span> : 'This is your first session' }, { label: 'Account created', value: formatDateTime(user.createdAt) }]} /></CardBody></Card></div> : null}
 

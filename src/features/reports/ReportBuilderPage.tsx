@@ -3,7 +3,6 @@ import { CalendarClock, Play, Plus, Save, Sparkles, Trash2 } from 'lucide-react'
 import type {
   CasePriority,
   CaseStatus,
-  FoiCase,
   ReportFilters,
   ReportFormat,
   ReportGroupBy,
@@ -35,12 +34,14 @@ import {
 import type { SelectOption } from '@/components/ui'
 import { PageHeader } from '@/components/common'
 import { BarChartCard } from '@/components/charts'
-import { useReports, useSaveReport, useDeleteReport } from '@/api/reports'
+import { useReports, useSaveReport, useDeleteReport, useReportRun } from '@/api/reports'
+import { useAction } from 'convex/react'
+import { api } from '../../../convex/_generated/api'
+import { nextReportRun } from '../../../convex/lib/reportSchedule'
 import { EMPTY_REFERENCE } from '@/api/directory'
 import { PRIORITY_META, STATUS_META, STATUS_ORDER } from '@/lib/constants'
-import { computeSla, slaComplianceRate } from '@/lib/sla'
-import { formatDate, formatDays, formatMonthYear, formatNumber, formatPercent } from '@/lib/format'
-import { downloadTextFile, toCsv, toggleIn } from '@/lib/utils'
+import { formatDate, formatDays, formatNumber, formatPercent } from '@/lib/format'
+import { toggleIn } from '@/lib/utils'
 import { useAuth } from '@/store/AuthContext'
 import { useData } from '@/store/DataContext'
 import { useToast } from '@/store/ToastContext'
@@ -52,14 +53,6 @@ const PERIOD_OPTIONS: SelectOption[] = [
   { value: 'yearly', label: 'Last 12 months' },
   { value: 'custom', label: 'Custom date range' },
 ]
-
-const PERIOD_DAYS: Record<ReportPeriod, number | null> = {
-  weekly: 7,
-  monthly: 30,
-  quarterly: 92,
-  yearly: 365,
-  custom: null,
-}
 
 const GROUP_OPTIONS: Array<{ value: ReportGroupBy; label: string }> = [
   { value: 'status', label: 'Status' },
@@ -115,61 +108,6 @@ interface ResultRow {
   escalations: number
 }
 
-function groupLabel(foiCase: FoiCase, groupBy: ReportGroupBy, userName: (id: string) => string) {
-  switch (groupBy) {
-    case 'status':
-      return STATUS_META[foiCase.status].label
-    case 'department':
-      return foiCase.department
-    case 'assignee':
-      return foiCase.assignedTo ? userName(foiCase.assignedTo) : 'Unassigned'
-    case 'priority':
-      return PRIORITY_META[foiCase.priority].label
-    case 'month':
-      return formatMonthYear(foiCase.dateSubmitted)
-    case 'requestor':
-      return foiCase.requestor.organization || 'Private individual'
-    default:
-      return '—'
-  }
-}
-
-/** Aggregates the live, permission-scoped rows returned by Convex. */
-function aggregate(rows: FoiCase[], groupBy: ReportGroupBy, userName: (id: string) => string): ResultRow[] {
-  const groups = new Map<string, FoiCase[]>()
-  rows.forEach((row) => {
-    const label = groupLabel(row, groupBy, userName)
-    const list = groups.get(label) ?? []
-    list.push(row)
-    groups.set(label, list)
-  })
-
-  const result: ResultRow[] = []
-  groups.forEach((list, label) => {
-    const responded = list.filter((row) => row.respondedAt)
-    const days = responded.map((row) =>
-      Math.max(
-        0,
-        Math.round(
-          (new Date(row.respondedAt!).getTime() - new Date(row.dateSubmitted).getTime()) / 86_400_000,
-        ),
-      ),
-    )
-    result.push({
-      key: label,
-      label,
-      count: list.length,
-      avg_response_days: days.length ? Math.round((days.reduce((a, b) => a + b, 0) / days.length) * 10) / 10 : 0,
-      sla_compliance: slaComplianceRate(list),
-      overdue_count: list.filter((row) => computeSla(row).state === 'overdue').length,
-      appeals: list.filter((row) => row.status === 'appeal' || row.isAppeal).length,
-      escalations: list.filter((row) => row.status === 'escalated').length,
-    })
-  })
-
-  return result.sort((a, b) => b.count - a.count)
-}
-
 function metricValue(row: ResultRow, metric: ReportMetric) {
   const raw = row[metric]
   if (metric === 'sla_compliance') return formatPercent(raw)
@@ -180,8 +118,9 @@ function metricValue(row: ResultRow, metric: ReportMetric) {
 /** FR-052 / FR-054: build, preview, save and schedule a custom report. */
 export function ReportBuilderPage() {
   const { user, can, isReadOnly } = useAuth()
-  const { cases: liveCases, usersById, reference, refresh } = useData()
+  const { usersById, reference, refresh } = useData()
   const liveReference = reference ?? EMPTY_REFERENCE
+  const userName = (id: string) => usersById.get(id)?.name ?? id
   const toast = useToast()
 
   const [filters, setFilters] = useState<ReportFilters>(DEFAULT_FILTERS)
@@ -200,39 +139,19 @@ export function ReportBuilderPage() {
   const convexReports = useReports()
   const convexSaveReport = useSaveReport()
   const convexDeleteReport = useDeleteReport()
+  const exportReport = useAction(api.actions.reports.exportReport)
 
   const saved = useMemo(
     () => convexReports ?? [],
     [convexReports],
   )
 
-  const scoped = useMemo(
-    () => user ? liveCases : [],
-    [liveCases, user],
-  )
-
-  const userName = (id: string) => usersById.get(id)?.name ?? id
-
-  const matched = useMemo(() => {
-    const days = PERIOD_DAYS[filters.period]
-    let rows = scoped
-    if (days) {
-      const cutoff = new Date()
-      cutoff.setDate(cutoff.getDate() - days)
-      rows = rows.filter((row) => new Date(row.dateSubmitted) >= cutoff)
-    } else {
-      if (filters.dateFrom) rows = rows.filter((row) => row.dateSubmitted.slice(0, 10) >= filters.dateFrom!)
-      if (filters.dateTo) rows = rows.filter((row) => row.dateSubmitted.slice(0, 10) <= filters.dateTo!)
-    }
-    if (filters.statuses.length) rows = rows.filter((row) => filters.statuses.includes(row.status))
-    if (filters.departments.length) rows = rows.filter((row) => filters.departments.includes(row.department))
-    if (filters.priorities.length) rows = rows.filter((row) => filters.priorities.includes(row.priority))
-    if (filters.assignees.length) rows = rows.filter((row) => row.assignedTo && filters.assignees.includes(row.assignedTo))
-    if (filters.tags.length) rows = rows.filter((row) => row.tags.some((tag) => filters.tags.includes(tag)))
-    return rows
-  }, [scoped, filters])
-
-  const results = useMemo(() => aggregate(matched, filters.groupBy, userName), [matched, filters.groupBy, usersById])
+  const run = useReportRun(filters)
+  const results: ResultRow[] = (run?.rows ?? []).map((row) => {
+    const group = String(row.group ?? '')
+    const label = filters.groupBy === 'assignee' ? usersById.get(group)?.name ?? group : group
+    return { key: group, label, count: Number(row.count ?? 0), avg_response_days: Number(row.avg_response_days ?? 0), sla_compliance: Number(row.sla_compliance ?? 0), overdue_count: Number(row.overdue_count ?? 0), appeals: Number(row.appeals ?? 0), escalations: Number(row.escalations ?? 0) }
+  })
   const metrics = filters.metrics.length ? filters.metrics : (['count'] as ReportMetric[])
   const groupTitle = GROUP_OPTIONS.find((option) => option.value === filters.groupBy)?.label ?? 'Group'
 
@@ -257,27 +176,28 @@ export function ReportBuilderPage() {
     toast.info('Report loaded', `Editing “${report.name}”.`)
   }
 
-  const exportRows = () => {
-    const headers = [groupTitle, ...metrics.map((metric) => METRIC_OPTIONS.find((m) => m.value === metric)!.label)]
-    downloadTextFile(
-      `${(name || 'custom-report').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv`,
-      toCsv(
-        headers,
-        results.map((row) => [row.label, ...metrics.map((metric) => row[metric])]),
-      ),
-      'text/csv',
-    )
-    toast.success('Report exported', `${results.length} row${results.length === 1 ? '' : 's'} written to CSV.`)
+  const exportRows = async () => {
+    setBusy(true)
+    try {
+      const file = await exportReport({ name: name || 'Custom report', filters, format })
+      const response = await fetch(file.url)
+      if (!response.ok) throw new Error('The report file could not be downloaded.')
+      const url = URL.createObjectURL(await response.blob())
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = file.fileName
+      anchor.click()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      toast.success('Report exported', `The ${format.toUpperCase()} file is ready.`)
+    } catch (error) {
+      toast.error('Report export failed', error instanceof Error ? error.message : 'Please try again.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const nextRunFor = (value: ScheduleCadence) => {
-    if (value === 'none') return null
-    const next = new Date()
-    if (value === 'weekly') next.setDate(next.getDate() + (8 - next.getDay()) % 7 || 7)
-    if (value === 'monthly') next.setMonth(next.getMonth() + 1, 1)
-    if (value === 'quarterly') next.setMonth(next.getMonth() + 3, 1)
-    if (value === 'yearly') next.setFullYear(next.getFullYear() + 1, 0)
-    return next.toISOString()
+    return nextReportRun(value) ?? null
   }
 
   const persist = async () => {
@@ -300,6 +220,8 @@ export function ReportBuilderPage() {
       refresh()
       toast.success(editingId ? 'Report updated' : 'Report saved', 'It is now available to your team.')
       resetForm()
+    } catch (error) {
+      toast.error('Report save failed', error instanceof Error ? error.message : 'Please try again.')
     } finally {
       setBusy(false)
     }
@@ -313,6 +235,8 @@ export function ReportBuilderPage() {
       refresh()
       toast.success('Report deleted', `“${pendingDelete.name}” was removed.`)
       if (editingId === pendingDelete.id) resetForm()
+    } catch (error) {
+      toast.error('Report deletion failed', error instanceof Error ? error.message : 'Please try again.')
     } finally {
       setBusy(false)
       setPendingDelete(null)
@@ -330,7 +254,7 @@ export function ReportBuilderPage() {
             <Button variant="ghost" leadingIcon={<Plus className="h-4 w-4" />} onClick={resetForm}>
               New definition
             </Button>
-            <Button variant="secondary" leadingIcon={<Play className="h-4 w-4" />} onClick={exportRows}>
+            <Button variant="secondary" leadingIcon={<Play className="h-4 w-4" />} onClick={() => void exportRows()} disabled={!can('report:export')} isLoading={isBusy}>
               Run &amp; export
             </Button>
             {can('report:schedule') && !isReadOnly ? (
@@ -457,7 +381,7 @@ export function ReportBuilderPage() {
                   options={FORMAT_OPTIONS}
                   value={format}
                   onChange={(event) => setFormat(event.target.value as ReportFormat)}
-                  hint="CSV is available now; PDF and Excel delivery require a configured export worker."
+                  hint="Download a real CSV, PDF, or Excel file."
                 />
               </div>
               <div>
@@ -485,11 +409,11 @@ export function ReportBuilderPage() {
           <Card>
             <CardHeader
               title="Preview"
-              description={`${formatNumber(matched.length)} request${matched.length === 1 ? '' : 's'} matched · ${results.length} group${results.length === 1 ? '' : 's'}`}
+              description={`${formatNumber((run?.total ?? 0))} request${(run?.total ?? 0) === 1 ? '' : 's'} matched · ${results.length} group${results.length === 1 ? '' : 's'}`}
               actions={<Badge tone="brand">{groupTitle}</Badge>}
             />
             <CardBody className="p-0">
-              {results.length === 0 ? (
+              {run?.error ? <p role="alert" className="p-5 text-sm text-crest-700">{run.error}</p> : results.length === 0 ? (
                 <div className="p-5">
                   <EmptyState
                     icon={<Sparkles className="h-6 w-6" />}

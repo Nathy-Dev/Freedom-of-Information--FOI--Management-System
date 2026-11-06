@@ -4,6 +4,12 @@
 import { internalQuery, internalMutation } from "../_generated/server";
 import { v } from "convex/values";
 
+export const removeExport = internalMutation({
+  args: { storageId: v.id("_storage") },
+  returns: v.null(),
+  handler: async (ctx, { storageId }) => { await ctx.storage.delete(storageId); return null; },
+});
+
 export const getUserForExport = internalQuery({
   args: { authUserId: v.string() },
   handler: async (ctx, args) => {
@@ -19,7 +25,8 @@ export const getUserForExport = internalQuery({
 export const listCasesForExport = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const rows = await ctx.db.query("cases").withIndex("by_date_submitted").take(5000);
+    const rows = await ctx.db.query("cases").withIndex("by_date_submitted").take(5001);
+    if (rows.length > 5000) throw new Error("This register exceeds 5,000 rows. No incomplete export was generated. Use a date-filtered report or a platform export.");
     return rows.map((c) => ({
       caseNumber: c.caseNumber,
       subject: c.subject,
@@ -38,7 +45,8 @@ export const listCasesForExport = internalQuery({
 export const listDocumentsForExport = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const rows = await ctx.db.query("documents").take(5000);
+    const rows = await ctx.db.query("documents").take(5001);
+    if (rows.length > 5000) throw new Error("This register exceeds 5,000 rows. No incomplete export was generated. Use a date-filtered report or a platform export.");
     return rows.map((d) => ({
       fileName: d.fileName,
       caseId: d.caseId,
@@ -55,7 +63,8 @@ export const listDocumentsForExport = internalQuery({
 export const listUsersForExport = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const rows = await ctx.db.query("users").take(2000);
+    const rows = await ctx.db.query("users").take(2001);
+    if (rows.length > 2000) throw new Error("The user register exceeds 2,000 rows. No incomplete export was generated. Use a platform export.");
     return rows.map((u) => ({
       name: u.name,
       email: u.email,
@@ -71,7 +80,8 @@ export const listUsersForExport = internalQuery({
 export const listCourtForExport = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const rows = await ctx.db.query("courtDates").take(5000);
+    const rows = await ctx.db.query("courtDates").take(5001);
+    if (rows.length > 5000) throw new Error("This register exceeds 5,000 rows. No incomplete export was generated. Use a date-filtered report or a platform export.");
     return rows.map((cd) => ({
       suitNumber: cd.suitNumber,
       caseId: cd.caseId,
@@ -89,7 +99,8 @@ export const listCourtForExport = internalQuery({
 export const listAuditForExport = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const rows = await ctx.db.query("auditLogs").order("desc").take(5000);
+    const rows = await ctx.db.query("auditLogs").order("desc").take(5001);
+    if (rows.length > 5000) throw new Error("This register exceeds 5,000 rows. No incomplete export was generated. Use a date-filtered report or a platform export.");
     return rows.map((a) => ({
       timestamp: a.timestamp,
       entityType: a.entityType,

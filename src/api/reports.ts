@@ -24,6 +24,7 @@ export function useViews(enabled = true) {
 }
 
 export interface ReportRunResult {
+  error?: string
   groupBy: string
   metrics: string[]
   rows: Array<Record<string, unknown>>

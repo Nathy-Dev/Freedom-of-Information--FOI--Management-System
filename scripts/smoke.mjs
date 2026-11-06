@@ -7,7 +7,10 @@
 import { createServer } from 'vite'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
-import { StaticRouter } from 'react-router-dom/server.js'
+import { StaticRouter } from 'react-router-dom'
+import assert from 'node:assert/strict'
+import { unzipSync, strFromU8 } from 'fflate'
+import { PDFDocument } from 'pdf-lib'
 
 const MODULES = [
   'src/lib/rbac.ts',
@@ -25,6 +28,7 @@ const MODULES = [
   'src/components/charts/index.ts',
   'src/components/layout/index.ts',
   'src/features/auth/index.ts',
+  'src/features/auth/ResetPasswordPage.tsx',
   'src/features/dashboard/index.ts',
   'src/features/cases/index.ts',
   'src/features/court/index.ts',
@@ -83,6 +87,36 @@ async function main() {
 
   let failures = 0
 
+  try {
+    const { entraTenant, entraConfigured } = await server.ssrLoadModule('/convex/lib/entraSettings.ts')
+    const tenant = '12345678-1234-1234-1234-123456789abc'
+    assert.equal(entraTenant({ ENTRA_ID_ISSUER_URL: `https://login.microsoftonline.com/${tenant}/v2.0` }), tenant)
+    assert.equal(entraTenant({ ENTRA_ID_TENANT_ID: 'common' }), null)
+    assert.equal(entraTenant({ ENTRA_ID_ISSUER_URL: 'https://untrusted.example/tenant/v2.0' }), null)
+    assert.equal(entraConfigured({ ENTRA_ID_TENANT_ID: tenant, ENTRA_ID_CLIENT_ID: 'client' }), false)
+    assert.equal(entraConfigured({ ENTRA_ID_TENANT_ID: tenant, ENTRA_ID_CLIENT_ID: 'client', ENTRA_ID_CLIENT_SECRET: 'test-secret' }), true)
+    const { reportFile } = await server.ssrLoadModule('/convex/lib/reportFiles.ts')
+    const { nextReportRun } = await server.ssrLoadModule('/convex/lib/reportSchedule.ts')
+    const rows = [{ group: '=HYPERLINK("unsafe")', count: 3 }, { group: '<Legal & Unit>', count: 2 }]
+    const csv = await reportFile('Safety report', rows, 'csv')
+    assert.match(strFromU8(csv.bytes), /'=HYPERLINK/)
+    const workbook = await reportFile('Safety report', rows, 'xlsx')
+    const archive = unzipSync(workbook.bytes)
+    assert.ok(archive['[Content_Types].xml'])
+    assert.match(strFromU8(archive['xl/worksheets/sheet1.xml']), /&lt;Legal &amp; Unit&gt;/)
+    assert.doesNotMatch(strFromU8(archive['xl/worksheets/sheet1.xml']), /<f>/)
+    const pdf = await reportFile('Safety report', rows, 'pdf')
+    assert.equal((await PDFDocument.load(pdf.bytes)).getPageCount(), 1)
+    assert.equal(nextReportRun('weekly', new Date('2026-11-05T12:00:00Z')), '2026-11-09T05:00:00.000Z')
+    assert.equal(nextReportRun('monthly', new Date('2026-11-05T12:00:00Z')), '2026-12-01T05:00:00.000Z')
+    assert.equal(nextReportRun('quarterly', new Date('2026-11-05T12:00:00Z')), '2027-01-01T05:00:00.000Z')
+    assert.equal(nextReportRun('yearly', new Date('2026-11-05T12:00:00Z')), '2027-01-01T05:00:00.000Z')
+    console.log('  ok   CSV safety, XLSX content, readable PDF and report schedules')
+  } catch (error) {
+    failures += 1
+    console.error(`  FAIL report formats or schedules: ${error.message}`)
+  }
+
   for (const id of MODULES) {
     try {
       const mod = await server.ssrLoadModule(`/${id}`)
@@ -100,7 +134,7 @@ async function main() {
   // cannot provide — so screen rendering is verified in the browser
   // (`npm run dev`). Every screen's module graph (barrels, components, hooks
   // wiring) is verified by the import checks above.
-  console.log('  ok   public screen rendering verified via module import checks (browser session required for full render)')
+  console.log('  note module loading checked; browser rendering and signed-in journeys are not covered')
 
   await server.close()
 

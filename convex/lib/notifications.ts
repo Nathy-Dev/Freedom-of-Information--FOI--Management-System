@@ -6,6 +6,7 @@
 import type { MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import type { NotificationKindLiteral } from "./constants";
+import { internal } from "../_generated/api";
 
 export async function pushNotification(
   ctx: MutationCtx,
@@ -24,7 +25,7 @@ export async function pushNotification(
   // Respect per-kind channel preferences.
   const pref = await ctx.db
     .query("notificationPreferences")
-    .withIndex("by_user", (q) => q.eq("userId", input.userId))
+    .withIndex("by_user_kind", (q) => q.eq("userId", input.userId).eq("kind", input.kind))
     .first();
   const kind = input.kind;
   const effective = channels.filter((channel) => {
@@ -35,7 +36,7 @@ export async function pushNotification(
     return true;
   });
 
-  return ctx.db.insert("notifications", {
+  const notificationId = await ctx.db.insert("notifications", {
     userId: input.userId,
     kind,
     title: input.title,
@@ -45,6 +46,12 @@ export async function pushNotification(
     isRead: false,
     channels: effective,
   });
+  for (const channel of [...new Set(effective)]) {
+    if (channel === "in_app") continue;
+    const deliveryId = await ctx.db.insert("notificationDeliveries", { notificationId, channel, status: "pending", attempts: 0, nextAttemptAt: Date.now() });
+    await ctx.scheduler.runAfter(0, internal.actions.notifications.deliver, { deliveryId });
+  }
+  return notificationId;
 }
 
 export async function markNotificationRead(

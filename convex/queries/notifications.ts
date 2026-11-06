@@ -4,7 +4,7 @@
 
 import { query } from "../_generated/server";
 import { v } from "convex/values";
-import { getCurrentUser } from "../lib/session";
+import { getCurrentUser, sessionSecurityRequirement } from "../lib/session";
 
 export const list = query({
   args: {
@@ -14,7 +14,7 @@ export const list = query({
     // Anonymous-safe: the DataContext calls this on every render (including the
     // login screen) — return an empty list instead of throwing.
     const user = await getCurrentUser(ctx);
-    if (!user) return [];
+    if (!user || user.status !== "active" || await sessionSecurityRequirement(ctx, user)) return [];
     const limit = Math.min(args.limit ?? 100, 500);
     const rows = await ctx.db
       .query("notifications")
@@ -29,7 +29,7 @@ export const unread = query({
   args: {},
   handler: async (ctx) => {
     const user = await getCurrentUser(ctx);
-    if (!user) return 0;
+    if (!user || user.status !== "active" || await sessionSecurityRequirement(ctx, user)) return 0;
     const rows = await ctx.db
       .query("notifications")
       .withIndex("by_user_read", (q) => q.eq("userId", user._id).eq("isRead", false))
@@ -42,7 +42,7 @@ export const preferences = query({
   args: {},
   handler: async (ctx) => {
     const user = await getCurrentUser(ctx);
-    if (!user) return [];
+    if (!user || user.status !== "active") return [];
     const rows = await ctx.db
       .query("notificationPreferences")
       .withIndex("by_user", (q) => q.eq("userId", user._id))

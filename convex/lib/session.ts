@@ -13,6 +13,7 @@ import { ConvexError } from "convex/values";
 import type { QueryCtx, MutationCtx, ActionCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
 import { hasPermission, isReadOnly, type Permission } from "./permissions";
+import { components } from "../_generated/api";
 
 export type AppUser = Doc<"users">;
 
@@ -26,6 +27,12 @@ type DbCtx = QueryCtx | MutationCtx;
 export async function getCurrentUser(ctx: DbCtx): Promise<AppUser | null> {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) return null;
+
+  const session = await ctx.runQuery(components.betterAuth.adapter.findOne, { model: "session", where: [{ field: "_id", value: String(identity.sessionId ?? "") }, { field: "expiresAt", operator: "gt", value: Date.now() }] });
+  if (!session || session.userId !== identity.subject) return null;
+  const projection = await ctx.db.query("userSessions").withIndex("by_session", (query) => query.eq("authSessionId", String(identity.sessionId ?? ""))).unique();
+  const settings = await ctx.db.query("systemSettings").first();
+  if (settings?.sessionTimeoutMinutes && Date.now() - (projection?.lastSeenAt ?? session.createdAt) > settings.sessionTimeoutMinutes * 60000) return null;
 
   return ctx.db
     .query("users")
@@ -110,7 +117,28 @@ export async function requireUser(ctx: DbCtx): Promise<AppUser> {
   const user = await getCurrentUser(ctx);
   if (!user) throw requireAuthError();
   assertActive(user);
+  if (await sessionSecurityRequirement(ctx, user)) throw forbiddenError("Complete the required security update in My Profile before using the system.");
   return user;
+}
+
+export async function securityRequirement(ctx: DbCtx, user: AppUser): Promise<string | null> {
+  if (user.status !== "active") return null;
+  const settings = await ctx.db.query("systemSettings").first();
+  const privileged = ["super_admin", "admin", "legal", "clerk"].includes(user.roleId);
+  const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, { model: "user", where: [{ field: "_id", value: user.authUserId }] });
+  if ((user.mfaRequired || (settings?.mfaRequiredForPrivileged && privileged)) && !authUser?.twoFactorEnabled) return "Enrol your authenticator app in My Profile to continue.";
+  if (settings?.passwordRotationDays && user.passwordChangedAt && Date.now() - Date.parse(user.passwordChangedAt) > settings.passwordRotationDays * 86400000) return "Change your expired password in My Profile to continue.";
+  return null;
+}
+
+export async function sessionSecurityRequirement(ctx: DbCtx, user: AppUser, sessionId?: string): Promise<string | null> {
+  const requirement = await securityRequirement(ctx, user);
+  if (requirement || user.status !== "active") return requirement;
+  const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, { model: "user", where: [{ field: "_id", value: user.authUserId }] });
+  if (!authUser?.twoFactorEnabled) return null;
+  const identity = await ctx.auth.getUserIdentity();
+  const session = await ctx.db.query("userSessions").withIndex("by_session", (query) => query.eq("authSessionId", sessionId ?? String(identity?.sessionId ?? ""))).unique();
+  return session?.secondFactorVerifiedAt ? null : "Enter an authenticator code in My Profile to verify this session.";
 }
 
 /** Require a signed-in user holding every listed permission. */
@@ -141,5 +169,5 @@ export async function requireAdmin(ctx: DbCtx): Promise<AppUser> {
 
 function isWritePermission(permission: Permission | Permission[]): boolean {
   const list = Array.isArray(permission) ? permission : [permission];
-  return list.some((p) => !p.startsWith("read") && !p.startsWith("document:read"));
+  return list.some((permission) => !permission.split(":").includes("read") && !permission.endsWith(":download") && !permission.endsWith(":export"));
 }
